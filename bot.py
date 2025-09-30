@@ -35,12 +35,16 @@ async def create_pool():
 
 # on_startup:
 async def on_startup(dispatcher):
+    # ساخت db_pool و ایجاد جدول‌ها
     await init_db()
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=5)
-    pg_storage = PostgresStorage(pool)
+    
+    # استفاده از همان db_pool برای PostgresStorage
+    pg_storage = PostgresStorage(db_pool)
     await pg_storage.create_table()
     dispatcher.storage = pg_storage
-    print("بوت شروع شد.")
+
+    print("✅ بوت شروع شد.")
+
 
 
       # جدول رو بساز/اطمینان حاصل کن
@@ -142,6 +146,275 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
     PRIMARY KEY (user_id, hashtag_id)
 );
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT UNIQUE NOT NULL,
+    first_name TEXT,
+    username TEXT,
+    joined_at TIMESTAMP DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS posts (
+    id SERIAL PRIMARY KEY,
+    post_id BIGINT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    hashtags TEXT[],
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    hashtag TEXT NOT NULL,
+    subscribed_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, hashtag)
+);
+-- جدول کاربران
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT UNIQUE NOT NULL,
+    first_name TEXT,
+    username TEXT,
+    joined_at TIMESTAMP DEFAULT NOW()
+);
+
+-- جدول پست‌ها
+CREATE TABLE IF NOT EXISTS posts (
+    id SERIAL PRIMARY KEY,
+    post_id BIGINT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    hashtags TEXT[],
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- جدول اشتراک‌ها (دسته‌بندی‌های دنبال‌شده توسط هر کاربر)
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    hashtag TEXT NOT NULL,
+    subscribed_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, hashtag)
+);
+CREATE TABLE IF NOT EXISTS posts (
+    id SERIAL PRIMARY KEY,
+    message_id BIGINT UNIQUE,
+    title TEXT,
+    content TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hashtags (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS post_hashtags (
+    post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+    hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE
+);
+-- حذف جدول‌های قدیمی در صورت وجود
+DROP TABLE IF EXISTS post_hashtags CASCADE;
+DROP TABLE IF EXISTS hashtags CASCADE;
+DROP TABLE IF EXISTS posts CASCADE;
+
+-- جدول پست‌ها
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    message_id BIGINT UNIQUE,
+    title TEXT,
+    content TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+-- جدول هشتگ‌ها
+CREATE TABLE hashtags (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE
+);
+
+-- جدول ارتباط پست ↔ هشتگ
+CREATE TABLE post_hashtags (
+    post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+    hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
+    PRIMARY KEY (post_id, hashtag_id)
+);
+CREATE TABLE IF NOT EXISTS users (
+    user_id BIGINT PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO hashtags (name)
+SELECT DISTINCT h.name
+FROM subscriptions s
+LEFT JOIN hashtags h ON h.id = s.hashtag_id
+WHERE h.id IS NULL AND s.hashtag_id IS NOT NULL
+
+INSERT INTO users (user_id, username, first_name, joined_at)
+VALUES (
+    7918162941, 'testuser', 'Mehdi', NOW()
+)
+
+UPDATE subscriptions s
+SET hashtag_id = h.id
+FROM hashtags h
+WHERE s.hashtag = h.name;
+SELECT * FROM subscriptions WHERE hashtag_id IS NULL;
+ALTER TABLE subscriptions
+ADD CONSTRAINT subscriptions_user_hashtag_unique UNIQUE (user_id, hashtag_id);
+
+ALTER TABLE subscriptions
+ALTER COLUMN hashtag_id SET NOT NULL;
+
+ALTER TABLE subscriptions
+ADD CONSTRAINT subscriptions_hashtag_id_fkey
+FOREIGN KEY (hashtag_id) REFERENCES hashtags(id) ON DELETE CASCADE;
+
+ALTER TABLE subscriptions DROP COLUMN hashtag;
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_hashtag_id ON subscriptions(hashtag_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+
+INSERT INTO hashtags (name)
+VALUES ('test')
+ON CONFLICT (name) DO NOTHING;
+
+SELECT id FROM hashtags WHERE name = 'test';
+
+INSERT INTO subscriptions (user_id, hashtag_id, subscribed_at)
+VALUES (7918162941, 8, NOW());
+
+-- Failed query:
+-- INSERT INTO subscriptions (user_id, hashtag_id, subscribed_at)
+-- VALUES (
+--     7918162941,
+--     (SELECT id FROM hashtags WHERE name = 'test'),
+--     NOW()
+-- );
+-- 
+INSERT INTO subscriptions (user_id, hashtag_id, subscribed_at)
+VALUES (
+    7918162941,
+    (SELECT id FROM hashtags WHERE name = 'test'),
+    NOW()
+)
+ON CONFLICT (user_id, hashtag_id) DO NOTHING;
+
+ALTER TABLE users
+ADD COLUMN created_at TIMESTAMP DEFAULT now();
+
+-- جدول دسته‌بندی خدمات
+CREATE TABLE IF NOT EXISTS service_categories (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL
+);
+
+-- جدول خدمات
+CREATE TABLE IF NOT EXISTS services (
+    id SERIAL PRIMARY KEY,
+    category_id INT REFERENCES service_categories(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    documents TEXT, -- مدارک لازم (لیست یا متن)
+    price TEXT,     -- هزینه تقریبی (رشته برای انعطاف‌پذیری)
+    created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO service_categories (name) VALUES
+('خدمات خودرو'),
+('خدمات کنکور'),
+('خدمات دانشگاه'),
+('خدمات سجام و بورس'),
+('خدمات مالیاتی و اظهارنامه'),
+('ثبت نام وام'),
+('خدمات ابلاغیه و ثنا'),
+('خدمات سخا و تعویض پلاک'),
+('سامانه املاک و اجاره نامه'),
+('خدمات بیمه و تامین اجتماعی'),
+('دیگر خدمات');
+
+CREATE TABLE IF NOT EXISTS service_categories (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS services (
+    id SERIAL PRIMARY KEY,
+    category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
+    title TEXT,
+    required_documents TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS service_categories (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS services (
+    id SERIAL PRIMARY KEY,
+    category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    documents TEXT,
+    price TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO service_categories (name) VALUES
+('خدمات خودرو'),
+('خدمات کنکور'),
+('خدمات دانشگاه'),
+('خدمات سجام و بورس'),
+('خدمات مالیاتی و اظهارنامه'),
+('ثبت نام وام'),
+('خدمات ابلاغیه و ثنا'),
+('خدمات سخا و تعویض پلاک'),
+('سامانه املاک و اجاره نامه'),
+('خدمات بیمه و تامین اجتماعی'),
+('دیگر خدمات')
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS fsm_storage (
+    id SERIAL PRIMARY KEY,
+    key TEXT NOT NULL,
+    state JSONB,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- جدول برای نگهداری state و داده‌ها
+CREATE TABLE IF NOT EXISTS fsm_storage (
+    key TEXT PRIMARY KEY,
+    state TEXT,
+    data JSONB,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS fsm_storage (
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    state TEXT,
+    data JSONB,
+    updated_at TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (chat_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id SERIAL PRIMARY KEY,
+    order_code TEXT UNIQUE NOT NULL,
+    user_id BIGINT NOT NULL,
+    service_name TEXT,
+    payload JSONB,       -- مدارک + توضیحات
+    status TEXT DEFAULT 'new',
+    created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO hashtags (name)
+SELECT DISTINCT h.name
+FROM subscriptions s
+LEFT JOIN hashtags h ON h.id = s.hashtag_id
+WHERE h.id IS NULL AND s.hashtag_id IS NOT NULL
+
 -- توی PostgreSQL اجرا کن
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -957,13 +1230,18 @@ async def admin_menu(msg: types.Message):
 async def add_service_start(msg: types.Message):
     # گرفتن دسته‌بندی‌ها از دیتابیس
     async with db_pool.acquire() as conn:
-    cats = await conn.fetch("SELECT * FROM service_categories")
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    for c in cats:
-        kb.add(c["name"])
-    kb.add("🔙 انصراف")
-    await AddService.waiting_for_category.set()
-    await msg.answer("یک دسته‌بندی انتخاب کنید:", reply_markup=kb)
+        cats = await conn.fetch("SELECT * FROM service_categories")
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+        for c in cats:
+            kb.add(c["name"])
+        kb.add("🔙 انصراف")
+        
+        await AddService.waiting_for_category.set()
+        await msg.answer(
+            "یک دسته‌بندی انتخاب کنید:", 
+            reply_markup=kb
+        )
+
 
 # ========================
 # عنوان خدمت
