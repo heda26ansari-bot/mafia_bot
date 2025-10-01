@@ -40,7 +40,6 @@ async def on_startup(dispatcher):
     
     # استفاده از همان db_pool برای PostgresStorage
     pg_storage = PostgresStorage(db_pool)
-    await pg_storage.create_table()
     dispatcher.storage = pg_storage
 
     print("✅ بوت شروع شد.")
@@ -306,6 +305,15 @@ async def init_db():
         user_id BIGINT UNIQUE,
         full_name TEXT,
         username TEXT
+    )
+    
+    """)
+        # جدول fsm_storage برای ذخیره وضعیت State
+    await conn.execute("""
+    CREATE TABLE IF NOT EXISTS fsm_storage (
+        user_id BIGINT PRIMARY KEY,
+        state TEXT,
+        data JSONB
     )
     """)
 
