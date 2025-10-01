@@ -46,7 +46,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             user_id BIGINT UNIQUE,
-            full_name TEXT,
+            first_name TEXT,
             username TEXT,
             created_at TIMESTAMP DEFAULT now()
         )
@@ -215,7 +215,7 @@ CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     user_id BIGINT UNIQUE NOT NULL,
-    full_name TEXT,
+    first_name TEXT,
     username TEXT,
     phone TEXT,
     created_at TIMESTAMP DEFAULT now()
@@ -311,6 +311,9 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO users (user_id, username, first_name, created_at)
 VALUES (7918162941, 'testuser', 'Mehdi', NOW())
 ON CONFLICT (user_id) DO NOTHING;
+
+ALTER TABLE users DROP COLUMN IF EXISTS full_name;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT;
 """
 
 SERVICES = {
