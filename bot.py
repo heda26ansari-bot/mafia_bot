@@ -56,14 +56,14 @@ class PostgresStorage:
     def __init__(self, pool):
         self.pool = pool
 
-    async def get_state(self, *, chat: int = None, user: int = None):
+    async def get_state(self, *, chat=None, user=None):
         if user is None:
             return None
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT state FROM fsm_storage WHERE user_id=$1", user)
             return row["state"] if row else None
 
-    async def set_state(self, *, chat: int = None, user: int = None, state: str = None):
+    async def set_state(self, *, chat=None, user=None, state=None):
         if user is None:
             return
         async with self.pool.acquire() as conn:
@@ -76,14 +76,14 @@ class PostgresStorage:
                     ON CONFLICT (user_id) DO UPDATE SET state=$2
                 """, user, state)
 
-    async def get_data(self, *, chat: int = None, user: int = None):
+    async def get_data(self, *, chat=None, user=None):
         if user is None:
             return {}
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT data FROM fsm_storage WHERE user_id=$1", user)
             return row["data"] if row else {}
 
-    async def set_data(self, *, chat: int = None, user: int = None, data: dict = None):
+    async def set_data(self, *, chat=None, user=None, data=None):
         if user is None:
             return
         async with self.pool.acquire() as conn:
@@ -93,11 +93,12 @@ class PostgresStorage:
                 ON CONFLICT (user_id) DO UPDATE SET data=$2::jsonb
             """, user, data or {})
 
-    async def reset_data(self, *, chat: int = None, user: int = None):
+    async def reset_data(self, *, chat=None, user=None):
         await self.set_data(chat=chat, user=user, data={})
 
-    async def reset_state(self, *, chat: int = None, user: int = None):
+    async def reset_state(self, *, chat=None, user=None):
         await self.set_state(chat=chat, user=user, state=None)
+
 
 
 # ========= ساخت جدول FSM در PostgreSQL =========
@@ -317,65 +318,65 @@ async def add_user_to_db(user_id: int, username: str = None, first_name: str = N
             user_id, username, first_name
         )
 
+
+# ----- در init_db یا main -----
 async def init_db():
-    conn = await asyncpg.connect(DATABASE_URL)
+    global pool, pg_storage
+    pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+    pg_storage = PostgresStorage(pool)
 
-    # جدول users
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT UNIQUE,
-        full_name TEXT,
-        username TEXT
-    )
-    
-    """)
+    async with pool.acquire() as conn:
+        # جدول users
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE,
+            full_name TEXT,
+            username TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """)
+
         # جدول fsm_storage برای ذخیره وضعیت State
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS fsm_storage (
-        user_id BIGINT PRIMARY KEY,
-        state TEXT,
-        data JSONB
-    )
-    """)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS fsm_storage (
+            user_id BIGINT PRIMARY KEY,
+            state TEXT,
+            data JSONB DEFAULT '{}'::jsonb
+        )
+        """)
 
-    # اضافه کردن ستون created_at اگر وجود نداشت
-    await conn.execute("""
-    ALTER TABLE users 
-    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()
-    """)
+        # جدول service_categories
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS service_categories (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE
+        )
+        """)
 
-    # جدول service_categories
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS service_categories (
-        id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE
-    )
-    """)
+        # جدول services
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS services (
+            id SERIAL PRIMARY KEY,
+            category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
+            title TEXT,
+            documents TEXT
+        )
+        """)
 
-    # جدول services
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS services (
-        id SERIAL PRIMARY KEY,
-        category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
-        title TEXT,
-        documents TEXT
-    )
-    """)
+        # جدول orders
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+            service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+            docs TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """)
 
-    # جدول orders
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS orders (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-        service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-        docs TEXT,
-        created_at TIMESTAMP DEFAULT now()
-    )
-    """)
-
-    await conn.close()
     print("✅ دیتابیس مقداردهی شد.")
+
 
 
 
