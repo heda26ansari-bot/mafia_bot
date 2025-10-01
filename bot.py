@@ -28,26 +28,14 @@ dp = Dispatcher(bot, storage=MemoryStorage())  # فعلاً موقت، تو on_s
 db_pool: asyncpg.pool.Pool | None = None
 pg_storage: PostgresStorage | None = None
 
-# ----- در init_db یا main -----
+
+# ----- در init_db -----
 async def init_db():
     global db_pool, pg_storage
     db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
     pg_storage = PostgresStorage(db_pool)
 
     async with db_pool.acquire() as conn:
-        await conn.execute(CREATE_TABLES_SQL)
-
-    print("✅ دیتابیس مقداردهی شد.")
-
-    
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        ALTER TABLE users
-        ADD COLUMN IF NOT EXISTS first_name TEXT
-        """)
-
-
-    async with pool.acquire() as conn:
         # جدول users
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -57,11 +45,6 @@ async def init_db():
             username TEXT,
             created_at TIMESTAMP DEFAULT now()
         )
-        """)
-
-        await conn.execute("""
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS first_name TEXT
         """)
 
         # جدول fsm_storage برای ذخیره وضعیت State
@@ -102,7 +85,14 @@ async def init_db():
         )
         """)
 
+        # اگر ستون first_name وجود نداشت، اضافه شود (برای دیتابیس‌های قبلی)
+        await conn.execute("""
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS first_name TEXT
+        """)
+
     print("✅ دیتابیس مقداردهی شد.")
+
 
 # اتصال به دیتابیس asyncpg
 async def create_pool():
@@ -112,25 +102,13 @@ async def create_pool():
         max_size=5
     )
 
-# on_startup:
+
+# ----- در on_startup -----
 async def on_startup(dispatcher):
     await init_db()
-    dispatcher.storage = pg_storage   # جایگزین MemoryStorage
+    dispatcher.storage = pg_storage   # استفاده از PostgresStorage به جای MemoryStorage
     print("✅ بوت شروع شد.")
 
-    
-    # استفاده از همان db_pool برای PostgresStorage
-    pg_storage = PostgresStorage(db_pool)
-    dispatcher.storage = pg_storage
-
-    print("✅ بوت شروع شد.")
-
-
-
-      # جدول رو بساز/اطمینان حاصل کن
-    dp.storage = pg_storage                  # جایگزین storage
-    # (اگر می‌خوای pool رو برای استفاده جای دیگه ذخیره کنی، میتونی dp['db_pool']=pool)
-    # logging.info("Postgres FSM storage ready")
 
 # ========= کلاس مدیریت FSM در PostgreSQL =========
 class PostgresStorage:
