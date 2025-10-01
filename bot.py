@@ -52,6 +52,11 @@ async def init_db():
         )
         """)
 
+        await conn.execute("""
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS first_name TEXT
+        """)
+
         # جدول fsm_storage برای ذخیره وضعیت State
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS fsm_storage (
