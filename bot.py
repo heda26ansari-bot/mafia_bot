@@ -39,6 +39,13 @@ async def init_db():
 
     print("✅ دیتابیس مقداردهی شد.")
 
+    
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS first_name TEXT
+        """)
+
 
     async with pool.acquire() as conn:
         # جدول users
@@ -219,12 +226,11 @@ CREATE_TABLES_SQL = """
 -- جدول کاربران
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    user_id BIGINT UNIQUE NOT NULL,
-    first_name TEXT,
+    user_id BIGINT UNIQUE,
     username TEXT,
-    phone TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
+
 
 -- جدول پست‌ها
 CREATE TABLE IF NOT EXISTS posts (
