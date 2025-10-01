@@ -125,7 +125,6 @@ user_search_limit: dict[int, int] = {}
 db_pool: asyncpg.pool.Pool | None = None
 
 CREATE_TABLES_SQL = """
-DROP TABLE users;
 -- جدول کاربران
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
