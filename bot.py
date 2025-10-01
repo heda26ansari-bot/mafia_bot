@@ -127,9 +127,11 @@ db_pool: asyncpg.pool.Pool | None = None
 CREATE_TABLES_SQL = """
 -- جدول کاربران
 CREATE TABLE IF NOT EXISTS users (
-    user_id BIGINT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT UNIQUE NOT NULL,
+    full_name TEXT,
     username TEXT,
-    first_name TEXT,
+    phone TEXT,
     created_at TIMESTAMP DEFAULT now()
 );
 
