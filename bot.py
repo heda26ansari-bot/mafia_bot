@@ -56,27 +56,49 @@ class PostgresStorage:
     def __init__(self, pool):
         self.pool = pool
 
-    async def set_state(self, chat_id, user_id, state):
+    async def get_state(self, *, chat: int = None, user: int = None):
+        if user is None:
+            return None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT state FROM fsm_storage WHERE user_id=$1", user)
+            return row["state"] if row else None
+
+    async def set_state(self, *, chat: int = None, user: int = None, state: str = None):
+        if user is None:
+            return
+        async with self.pool.acquire() as conn:
+            if state is None:
+                await conn.execute("DELETE FROM fsm_storage WHERE user_id=$1", user)
+            else:
+                await conn.execute("""
+                    INSERT INTO fsm_storage (user_id, state, data)
+                    VALUES ($1, $2, '{}'::jsonb)
+                    ON CONFLICT (user_id) DO UPDATE SET state=$2
+                """, user, state)
+
+    async def get_data(self, *, chat: int = None, user: int = None):
+        if user is None:
+            return {}
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT data FROM fsm_storage WHERE user_id=$1", user)
+            return row["data"] if row else {}
+
+    async def set_data(self, *, chat: int = None, user: int = None, data: dict = None):
+        if user is None:
+            return
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO fsm_states (chat_id, user_id, state)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (chat_id, user_id) DO UPDATE SET state = $3
-            """, chat_id, user_id, state)
+                INSERT INTO fsm_storage (user_id, state, data)
+                VALUES ($1, NULL, $2::jsonb)
+                ON CONFLICT (user_id) DO UPDATE SET data=$2::jsonb
+            """, user, data or {})
 
-    async def get_state(self, chat_id, user_id):
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT state FROM fsm_states
-                WHERE chat_id=$1 AND user_id=$2
-            """, chat_id, user_id)
-            return row['state'] if row else None
+    async def reset_data(self, *, chat: int = None, user: int = None):
+        await self.set_data(chat=chat, user=user, data={})
 
-    async def finish(self, chat_id, user_id):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                DELETE FROM fsm_states WHERE chat_id=$1 AND user_id=$2
-            """, chat_id, user_id)
+    async def reset_state(self, *, chat: int = None, user: int = None):
+        await self.set_state(chat=chat, user=user, state=None)
+
 
 # ========= ساخت جدول FSM در PostgreSQL =========
 CREATE_FSM_TABLE = """
