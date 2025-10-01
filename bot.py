@@ -297,16 +297,58 @@ async def add_user_to_db(user_id: int, username: str = None, first_name: str = N
             user_id, username, first_name
         )
 
-
 async def init_db():
-    global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
-    async with db_pool.acquire() as conn:
-        for stmt in CREATE_TABLES_SQL.strip().split(";"):
-            s = stmt.strip()
-            if s:
-                await conn.execute(s + ";")
-    print("✅ DB initialized")
+    conn = await asyncpg.connect(DATABASE_URL)
+
+    # جدول users
+    await conn.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT UNIQUE,
+        full_name TEXT,
+        username TEXT
+    )
+    """)
+
+    # اضافه کردن ستون created_at اگر وجود نداشت
+    await conn.execute("""
+    ALTER TABLE users 
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()
+    """)
+
+    # جدول service_categories
+    await conn.execute("""
+    CREATE TABLE IF NOT EXISTS service_categories (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE
+    )
+    """)
+
+    # جدول services
+    await conn.execute("""
+    CREATE TABLE IF NOT EXISTS services (
+        id SERIAL PRIMARY KEY,
+        category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
+        title TEXT,
+        documents TEXT
+    )
+    """)
+
+    # جدول orders
+    await conn.execute("""
+    CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+        service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+        docs TEXT,
+        created_at TIMESTAMP DEFAULT now()
+    )
+    """)
+
+    await conn.close()
+    print("✅ دیتابیس مقداردهی شد.")
+
+
 
 user_search_limit: dict[int,int] = {}
 
