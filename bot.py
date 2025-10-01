@@ -25,12 +25,20 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())  # فعلاً موقت، تو on_startup ست میشه
 
+db_pool: asyncpg.pool.Pool | None = None
+pg_storage: PostgresStorage | None = None
 
 # ----- در init_db یا main -----
 async def init_db():
-    global pool, pg_storage
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL)
-    pg_storage = PostgresStorage(pool)
+    global db_pool, pg_storage
+    db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+    pg_storage = PostgresStorage(db_pool)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(CREATE_TABLES_SQL)
+
+    print("✅ دیتابیس مقداردهی شد.")
+
 
     async with pool.acquire() as conn:
         # جدول users
@@ -94,8 +102,10 @@ async def create_pool():
 
 # on_startup:
 async def on_startup(dispatcher):
-    # ساخت db_pool و ایجاد جدول‌ها
     await init_db()
+    dispatcher.storage = pg_storage   # جایگزین MemoryStorage
+    print("✅ بوت شروع شد.")
+
     
     # استفاده از همان db_pool برای PostgresStorage
     pg_storage = PostgresStorage(db_pool)
@@ -187,11 +197,6 @@ if not BOT_TOKEN or not DATABASE_URL or not CHANNEL_ID:
 
 CHANNEL_ID_INT = int(CHANNEL_ID)
 
-async def main():
-    bot = Bot(token=BOT_TOKEN)
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL)
-    storage = PostgresStorage(pool)
-    dp = Dispatcher(bot, storage=storage)
 
 waiting_for_keyword: dict[int, bool] = {}
 waiting_for_limit: dict[int, bool] = {}
@@ -638,7 +643,7 @@ def main_menu_keyboard(user_id=None):
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
     kb = main_menu_keyboard(message.from_user.id)
-    await msg.answer(
+    await message.answer(
         "سلام 👋\nمنو را انتخاب کنید:",
         reply_markup=main_menu_keyboard(msg.from_user.id)
     )
