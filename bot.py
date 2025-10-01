@@ -1,12 +1,13 @@
 import logging
 import asyncpg
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 # ---------------- تنظیمات ----------------
-API_TOKEN = "توکن_ربات"
-DATABASE_URL = "postgresql://user:password@host:port/dbname"
+API_TOKEN = os.getenv("BOT_TOKEN")         # ست شده روی Railway
+DATABASE_URL = os.getenv("DATABASE_URL")   # ست شده روی Railway
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,6 +22,7 @@ async def init_db():
     pool = await asyncpg.create_pool(DATABASE_URL)
 
     async with pool.acquire() as conn:
+        # جدول کاربران
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -31,6 +33,7 @@ async def init_db():
         );
         """)
 
+        # جدول سفارش‌ها
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
