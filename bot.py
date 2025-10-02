@@ -146,6 +146,9 @@ def orders_menu():
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
     return kb
 
+
+
+
 # بازگشت به منوی اصلی
 @dp.message_handler(lambda m: m.text == "⬅️ بازگشت به منوی اصلی")
 async def back_to_main(message: types.Message):
@@ -157,6 +160,46 @@ async def back_to_main(message: types.Message):
 async def show_orders_menu(message: types.Message):
     await message.answer("📋 لطفاً یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=orders_menu())
 
+# ===== سفارش خدمات =====
+@dp.message_handler(lambda m: m.text == "➕ ثبت سفارش")
+async def add_order(message: types.Message):
+    # اینجا منطق همون بخش انتخاب دسته‌بندی خدماتت رو بذار
+    await message.answer("📋 لطفاً یک دسته‌بندی برای سفارش انتخاب کنید:", reply_markup=await service_categories_keyboard())
+
+
+@dp.message_handler(lambda m: m.text == "📦 سفارش‌های من")
+async def my_orders(message: types.Message):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT o.order_code, o.status, s.title 
+            FROM orders o
+            JOIN services s ON o.service_id = s.id
+            WHERE o.user_id=$1
+            ORDER BY o.created_at DESC
+            LIMIT 5
+        """, message.from_user.id)
+
+    if not rows:
+        await message.answer("⛔ سفارشی برای شما ثبت نشده است.")
+    else:
+        text = "📦 <b>آخرین سفارش‌های شما:</b>\n\n"
+        for r in rows:
+            text += f"▫️ {r['title']} | کد: <code>{r['order_code']}</code> | وضعیت: {r['status']}\n"
+        await message.answer(text)
+
+
+# ===== مدیریت خدمات =====
+@dp.message_handler(lambda m: m.text == "⚙️ مدیریت خدمات")
+async def manage_services(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("⛔ شما دسترسی به این بخش ندارید.")
+
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("➕ افزودن خدمات"))
+    kb.add(KeyboardButton("❌ حذف خدمات"))
+    kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
+
+    await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
 
 
 
