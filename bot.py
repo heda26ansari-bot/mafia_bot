@@ -146,16 +146,24 @@ def orders_menu():
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
     return kb
 
-async def service_categories_keyboard():
-    kb = InlineKeyboardMarkup()
+async def service_categories_keyboard(prefix: str = "order"):
+    kb = InlineKeyboardMarkup(row_width=2)
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT id, name FROM service_categories ORDER BY id")
-
     if not rows:
-        kb.add(InlineKeyboardButton("⛔ هیچ دسته‌بندی وجود ندارد", callback_data="none"))
-    else:
-        for r in rows:
-            kb.add(InlineKeyboardButton(r["name"], callback_data=f"cat_{r['id']}"))
+        kb.add(InlineKeyboardButton("⛔ هیچ دسته‌ای وجود ندارد", callback_data="none"))
+        return kb
+
+    for r in rows:
+        cid = r["id"]
+        name = r["name"]
+        if prefix == "add":
+            cb = f"addcat_{cid}"
+        elif prefix == "del":
+            cb = f"delcat_{cid}"
+        else:
+            cb = f"ordercat_{cid}"
+        kb.add(InlineKeyboardButton(name, callback_data=cb))
 
     return kb
 
@@ -213,13 +221,6 @@ async def manage_services(message: types.Message):
     await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
     
 
-@dp.message_handler(lambda m: m.text == "➕ افزودن خدمات")
-async def add_service_start(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return await message.answer("⛔ شما دسترسی به این بخش ندارید.")
-
-    kb = await service_categories_keyboard()
-    await message.answer("📂 یک دسته‌بندی برای افزودن خدمت انتخاب کنید:", reply_markup=kb)
 
 @dp.message_handler(lambda m: m.text == "❌ حذف خدمات")
 async def delete_service_start(message: types.Message):
@@ -229,6 +230,15 @@ async def delete_service_start(message: types.Message):
     kb = await service_categories_keyboard()
     await message.answer("📂 یک دسته‌بندی برای حذف خدمت انتخاب کنید:", reply_markup=kb)
 
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_"))
+async def process_delete_service(callback_query: types.CallbackQuery):
+    service_id = int(callback_query.data.split("_")[1])
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM services WHERE id=$1", service_id)
+
+    await bot.answer_callback_query(callback_query.id, "✅ خدمت حذف شد")
+    await bot.send_message(callback_query.from_user.id, "خدمت مورد نظر حذف شد.", reply_markup=await main_menu())
 
 
 # ---------------- هندلرها ----------------
@@ -728,6 +738,142 @@ async def toggle_subscription(callback_query: types.CallbackQuery):
 
     await callback_query.message.edit_reply_markup(reply_markup=keyboard)
     await callback_query.answer("وضعیت بروزرسانی شد ✅")
+
+# ==========================
+#  مرحله: کاربر میزند ➕ افزودن خدمات (در ریپلای کیبورد)
+# ==========================
+@dp.message_handler(lambda m: m.text == "➕ افزودن خدمات")
+async def cmd_add_service_menu(msg: types.Message):
+    # فقط ادمین اجازه داره اضافه کنه
+    if msg.from_user.id != ADMIN_ID:
+        await msg.answer("⛔ شما دسترسی به این بخش ندارید.")
+        return
+
+    kb = await service_categories_keyboard(prefix="add")
+    await msg.answer("📂 لطفاً دسته‌بندی موردنظر برای افزودن خدمت را انتخاب کنید:", reply_markup=kb)
+
+
+# ==========================
+#  مرحله: کاربر روی یک دسته برای افزودن خدمت کلیک می‌کنه
+#  callback_data = addcat_{category_id}
+# ==========================
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("addcat_"))
+async def process_add_service_category(call: types.CallbackQuery):
+    await bot.answer_callback_query(call.id)  # برداشتن لودینگی
+
+    try:
+        category_id = int(call.data.split("_", 1)[1])
+    except Exception:
+        await call.message.answer("❌ دادهٔ نامعتبر.")
+        return
+
+    # ست کردن وضعیت موقت کاربر
+    user_flow[call.from_user.id] = {
+        "flow": "add_service",
+        "step": "title",        # مرحلهٔ فعلی: دریافت عنوان
+        "category_id": category_id,
+        "title": None,
+        "documents": []        # لیستی از پیام‌ها/متن‌هایی که کاربر می‌فرسته
+    }
+
+    await call.message.answer("✍️ لطفاً *عنوان* خدمت جدید را ارسال کنید.", parse_mode="Markdown")
+
+
+# ==========================
+#  دریافت پیام‌های مرحله‌ای برای افزودن خدمت
+#  - مرحله title: دریافت عنوان -> سپس مرحله desc
+#  - مرحله desc: دریافت متن/مدارک (چند پیام)؛ کاربر در نهایت دکمهٔ '✅ ثبت خدمت' را می‌زند
+# ==========================
+@dp.message_handler(lambda m: m.from_user.id in user_flow and user_flow[m.from_user.id].get("flow") == "add_service")
+async def add_service_steps(msg: types.Message):
+    uid = msg.from_user.id
+    data = user_flow.get(uid)
+    if not data:
+        return
+
+    # مرحله عنوان
+    if data["step"] == "title":
+        title = msg.text.strip()
+        if not title:
+            await msg.answer("❌ لطفاً یک عنوان معتبر ارسال کنید.")
+            return
+
+        data["title"] = title
+        data["step"] = "desc"
+
+        # دکمهٔ ثبت خدمت (اینلاین)
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("✅ ثبت خدمت", callback_data="confirm_add_service"))
+        kb.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_add_service"))
+
+        await msg.answer(
+            "📝 حالا توضیحات و مدارک لازم برای این خدمت را ارسال کنید.\n"
+            "🔸 می‌توانید چند پیام ارسال کنید.\n"
+            "🔸 پس از اتمام، دکمهٔ «✅ ثبت خدمت» را بزنید.",
+            reply_markup=kb
+        )
+        return
+
+    # مرحله جمع‌آوری مدارک/توضیحات (می‌تواند چند پیام باشد)
+    if data["step"] == "desc":
+        # برای هر پیام متن، عکس، سند و غیره، ما متن یا شناسه را ذخیره می‌کنیم.
+        # اینجا ساده‌ترین حالت: متن‌ها را جمع می‌کنیم؛ برای فایل‌ها شناسهٔ file_id نیز ذخیره می‌کنیم.
+        entry = {}
+        entry["content_type"] = msg.content_type
+        if msg.content_type == "text":
+            entry["text"] = msg.text
+        elif msg.content_type == "photo":
+            entry["file_id"] = msg.photo[-1].file_id
+            entry["caption"] = msg.caption or ""
+        elif msg.content_type == "document":
+            entry["file_id"] = msg.document.file_id
+            entry["file_name"] = msg.document.file_name
+            entry["caption"] = msg.caption or ""
+        else:
+            # برای سایر نوع‌ها هم ذخیرهٔ فایل_id یا متن
+            try:
+                entry["file_id"] = getattr(msg, msg.content_type).file_id
+            except Exception:
+                entry["text"] = f"<{msg.content_type} received>"
+
+        data["documents"].append(entry)
+        await msg.answer("✅ دریافت شد. اگر همهٔ مدارک را فرستادید، دکمهٔ «✅ ثبت خدمت» را بزنید. در غیر اینصورت ادامه بدید یا «❌ انصراف» را بزنید.")
+
+
+# ==========================
+#  کاربر دکمهٔ 'ثبت خدمت' یا 'انصراف' میزنه
+# ==========================
+@dp.callback_query_handler(lambda c: c.data in ("confirm_add_service", "cancel_add_service"))
+async def handle_confirm_or_cancel_add_service(call: types.CallbackQuery):
+    await bot.answer_callback_query(call.id)
+
+    uid = call.from_user.id
+    data = user_flow.get(uid)
+    if not data or data.get("flow") != "add_service":
+        await call.message.answer("⛔ فرایند افزودن خدمتی در حال انجام نیست.")
+        return
+
+    if call.data == "cancel_add_service":
+        del user_flow[uid]
+        await call.message.answer("❌ افزودن خدمت لغو شد.", reply_markup=main_menu())
+        return
+
+    # confirm_add_service: ثبت در دیتابیس
+    category_id = data["category_id"]
+    title = data["title"] or "بدون عنوان"
+    # تبدیل documents به متن ساده برای ذخیره — میتونی JSON هم ذخیره کنی
+    # این مثال متن‌های ارسالی و file_idها را در قالب JSON ذخیره میکند
+    import json
+    docs_json = json.dumps(data["documents"], ensure_ascii=False)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO services (category_id, title, documents) VALUES ($1, $2, $3)",
+            category_id, title, docs_json
+        )
+
+    del user_flow[uid]
+    await call.message.answer(f"✅ خدمت «{title}» با موفقیت ثبت شد.", reply_markup=main_menu())
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
