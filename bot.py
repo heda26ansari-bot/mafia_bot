@@ -79,6 +79,28 @@ async def init_db():
         """)
 
 
+
+    async with pool.acquire() as conn:
+        # جدول orders (اگر نبود ساخته میشه)
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            service_id INTEGER,
+            order_code TEXT UNIQUE,
+            docs TEXT,
+            status TEXT DEFAULT 'new',
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """)
+
+        # اگر ستون docs قبلاً ساخته نشده باشه، اضافه بشه
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS docs TEXT
+        """)
+
+
         # داده‌ی تستی (فقط بار اول)
         await conn.execute("""
         INSERT INTO service_categories (name) VALUES ('مدارک شخصی'), ('مدارک شرکتی')
