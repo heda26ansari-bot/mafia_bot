@@ -7,6 +7,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.dispatcher import FSMContext
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 class OrderForm(StatesGroup):
     waiting_for_documents = State()
@@ -104,24 +105,6 @@ async def init_db():
         ADD COLUMN IF NOT EXISTS docs TEXT
         """)
 
-
-        # داده‌ی تستی (فقط بار اول)
-        await conn.execute("""
-        INSERT INTO service_categories (name) VALUES ('مدارک شخصی'), ('مدارک شرکتی')
-        ON CONFLICT DO NOTHING;
-        """)
-        await conn.execute("""
-        INSERT INTO services (category_id, title)
-        SELECT 1, 'گواهینامه' WHERE NOT EXISTS (SELECT 1 FROM services WHERE title='گواهینامه');
-        """)
-        await conn.execute("""
-        INSERT INTO services (category_id, title)
-        SELECT 1, 'شناسنامه' WHERE NOT EXISTS (SELECT 1 FROM services WHERE title='شناسنامه');
-        """)
-        await conn.execute("""
-        INSERT INTO services (category_id, title)
-        SELECT 2, 'ثبت شرکت' WHERE NOT EXISTS (SELECT 1 FROM services WHERE title='ثبت شرکت');
-        """)
         await conn.execute("""
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
@@ -146,27 +129,36 @@ async def init_db():
 # ---------------- کیبورد ----------------
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
+# منوی اصلی
 def main_menu():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(KeyboardButton("🛠 سفارش خدمات"))
-    keyboard.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
-    keyboard.add(KeyboardButton("🔔 دریافت خودکار خبر"))
-    return keyboard
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("📋 سفارش خدمات"))
+    kb.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
+    kb.add(KeyboardButton("🔔 دریافت خودکار خبر"))
+    kb.add(KeyboardButton("⚙️ مدیریت خدمات"))
+    return kb
 
-def services_menu():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(KeyboardButton("➕ ثبت سفارش جدید"))
-    keyboard.add(KeyboardButton("📋 سفارش‌های من"))
-    keyboard.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
-    return keyboard
+# زیرمنوی سفارشات
+def orders_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("➕ ثبت سفارش"))
+    kb.add(KeyboardButton("📦 سفارش‌های من"))
+    kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
+    return kb
 
-@dp.message_handler(lambda m: m.text == "🛠 سفارش خدمات")
-async def show_services_menu(message: types.Message):
-    await message.answer("📌 لطفاً یک گزینه انتخاب کنید:", reply_markup=services_menu())
-
+# بازگشت به منوی اصلی
 @dp.message_handler(lambda m: m.text == "⬅️ بازگشت به منوی اصلی")
 async def back_to_main(message: types.Message):
     await message.answer("🔙 بازگشت به منوی اصلی", reply_markup=main_menu())
+
+
+# رفتن به زیرمنوی سفارشات
+@dp.message_handler(lambda m: m.text == "📋 سفارش خدمات")
+async def show_orders_menu(message: types.Message):
+    await message.answer("📋 لطفاً یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=orders_menu())
+
+
+
 
 # ---------------- هندلرها ----------------
 @dp.message_handler(commands=["start"])
@@ -184,19 +176,17 @@ async def start_cmd(msg: types.Message):
         reply_markup=main_menu()
     )
 
-@dp.message_handler(lambda m: m.text == "مدیریت خدمات")
-async def show_manage_services(msg: types.Message):
-    await msg.answer("📋 یکی از گزینه‌های مدیریت خدمات را انتخاب کنید:", reply_markup=manage_services_menu())
+# بازگشت به منوی اصلی
+@dp.message_handler(lambda m: m.text == "⬅️ بازگشت به منوی اصلی")
+async def back_to_main(message: types.Message):
+    await message.answer("🔙 بازگشت به منوی اصلی", reply_markup=main_menu())
 
 
-def manage_services_menu():
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        InlineKeyboardButton("➕ افزودن خدمات", callback_data="manage_add_service"),
-        InlineKeyboardButton("🗑 حذف خدمات", callback_data="manage_delete_service"),
-        InlineKeyboardButton("⬅️ بازگشت", callback_data="back_main")
-    )
-    return kb
+# رفتن به زیرمنوی سفارشات
+@dp.message_handler(lambda m: m.text == "📋 سفارش خدمات")
+async def show_orders_menu(message: types.Message):
+    await message.answer("📋 لطفاً یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=orders_menu())
+
 
 @dp.callback_query_handler(lambda c: c.data == "manage_add_service")
 async def manage_add_service(callback: types.CallbackQuery):
@@ -577,36 +567,96 @@ async def show_tag_posts(callback_query: types.CallbackQuery):
 
     await bot.answer_callback_query(callback_query.id)
 
-@dp.message_handler(lambda m: m.text == "🔔 دریافت خودکار خبر")
-async def show_subscriptions(msg: types.Message):
+# =========================
+# 🔍 جستجو اطلاعیه/خبر
+# =========================
+@dp.message_handler(lambda m: m.text == "🔍 جستجو اطلاعیه/خبر")
+async def start_search(message: types.Message):
+    await message.answer("🔎 لطفاً کلیدواژه مورد نظر رو وارد کنید:")
+    await SearchForm.waiting_for_keyword.set()
+
+@dp.message_handler(state=SearchForm.waiting_for_keyword)
+async def process_search(message: types.Message, state: FSMContext):
+    keyword = message.text.strip()
     async with pool.acquire() as conn:
-        hashtags = await conn.fetch("SELECT id, name FROM hashtags ORDER BY name")
-        user_subs = await conn.fetch("SELECT hashtag_id FROM subscriptions WHERE user_id=$1", msg.from_user.id)
-        user_subs_ids = [r["hashtag_id"] for r in user_subs]
+        rows = await conn.fetch(
+            "SELECT id, title, content FROM posts WHERE title ILIKE $1 ORDER BY created_at DESC LIMIT 5",
+            f"%{keyword}%"
+        )
 
-    kb = InlineKeyboardMarkup(row_width=2)
-    for h in hashtags:
-        status = "✅" if h["id"] in user_subs_ids else "❌"
-        kb.insert(InlineKeyboardButton(f"{status} #{h['name']}", callback_data=f"sub_{h['id']}"))
+    if not rows:
+        await message.answer("⛔ موردی یافت نشد.")
+    else:
+        for row in rows:
+            summary = (row["content"][:100] + "...") if row["content"] else "—"
+            keyboard = InlineKeyboardMarkup().add(
+                InlineKeyboardButton("📖 نمایش کامل خبر", callback_data=f"post_{row['id']}")
+            )
+            hashtags = await conn.fetch("""
+                SELECT h.name FROM post_hashtags ph
+                JOIN hashtags h ON ph.hashtag_id=h.id
+                WHERE ph.post_id=$1
+            """, row["id"])
+            for h in hashtags:
+                keyboard.add(InlineKeyboardButton(f"#{h['name']}", callback_data=f"tag_{h['name']}"))
 
-    await msg.answer("🔔 هشتگ‌هایی که می‌خواهید خبرهایشان خودکار برایتان ارسال شود را انتخاب کنید:", reply_markup=kb)
+            await message.answer(
+                f"📰 <b>{row['title']}</b>\n\n"
+                f"{summary}",
+                reply_markup=keyboard
+            )
 
-@dp.callback_query_handler(lambda c: c.data.startswith("sub_"))
+    await state.finish()
+
+# ======================
+# 🔔 دریافت خودکار خبر
+# ======================
+@dp.message_handler(lambda m: m.text == "🔔 دریافت خودکار خبر")
+async def show_subscriptions(message: types.Message):
+    async with pool.acquire() as conn:
+        hashtags = await conn.fetch("SELECT * FROM hashtags ORDER BY name")
+
+        keyboard = InlineKeyboardMarkup()
+        for h in hashtags:
+            subscribed = await conn.fetchrow(
+                "SELECT 1 FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2",
+                message.from_user.id, h["id"]
+            )
+            status = "✅" if subscribed else "❌"
+            keyboard.add(
+                InlineKeyboardButton(f"{h['name']} {status}", callback_data=f"toggle_sub_{h['id']}")
+            )
+
+    await message.answer("🔔 هشتگ‌هایی که می‌خواهید دنبال کنید رو انتخاب کنید:", reply_markup=keyboard)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("toggle_sub_"))
 async def toggle_subscription(callback_query: types.CallbackQuery):
-    hashtag_id = int(callback_query.data.split("_")[1])
+    hashtag_id = int(callback_query.data.split("_")[2])
     user_id = callback_query.from_user.id
 
     async with pool.acquire() as conn:
-        exists = await conn.fetchrow("SELECT 1 FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2", user_id, hashtag_id)
-        if exists:
+        sub = await conn.fetchrow("SELECT 1 FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2", user_id, hashtag_id)
+        if sub:
             await conn.execute("DELETE FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2", user_id, hashtag_id)
         else:
-            await conn.execute("INSERT INTO subscriptions (user_id, hashtag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", user_id, hashtag_id)
+            await conn.execute(
+                "INSERT INTO subscriptions (user_id, hashtag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                user_id, hashtag_id
+            )
 
-    # رفرش منو
-    await show_subscriptions(callback_query.message)
-    await bot.answer_callback_query(callback_query.id, "✅ بروزرسانی شد")
+        hashtags = await conn.fetch("SELECT * FROM hashtags ORDER BY name")
+        keyboard = InlineKeyboardMarkup()
+        for h in hashtags:
+            subscribed = await conn.fetchrow(
+                "SELECT 1 FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2",
+                user_id, h["id"]
+            )
+            status = "✅" if subscribed else "❌"
+            keyboard.add(InlineKeyboardButton(f"{h['name']} {status}", callback_data=f"toggle_sub_{h['id']}"))
 
+    await callback_query.message.edit_reply_markup(reply_markup=keyboard)
+    await callback_query.answer("وضعیت بروزرسانی شد ✅")
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
