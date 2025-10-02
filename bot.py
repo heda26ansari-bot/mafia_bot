@@ -3,6 +3,7 @@ import asyncpg
 import os
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -105,6 +106,73 @@ async def start_cmd(msg: types.Message):
         "به ربات سفارش خوش اومدی.",
         reply_markup=main_menu()
     )
+
+@dp.message_handler(lambda m: m.text == "مدیریت خدمات")
+async def show_manage_services(msg: types.Message):
+    await msg.answer("📋 یکی از گزینه‌های مدیریت خدمات را انتخاب کنید:", reply_markup=manage_services_menu())
+
+
+def manage_services_menu():
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("➕ افزودن خدمات", callback_data="manage_add_service"),
+        InlineKeyboardButton("🗑 حذف خدمات", callback_data="manage_delete_service"),
+        InlineKeyboardButton("⬅️ بازگشت", callback_data="back_main")
+    )
+    return kb
+
+@dp.callback_query_handler(lambda c: c.data == "manage_add_service")
+async def manage_add_service(callback: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        categories = await conn.fetch("SELECT * FROM service_categories")
+    kb = InlineKeyboardMarkup(row_width=1)
+    for cat in categories:
+        kb.add(InlineKeyboardButton(cat["name"], callback_data=f"add_service_cat_{cat['id']}"))
+    kb.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="manage_services"))
+    await callback.message.edit_text("📂 یک دسته‌بندی انتخاب کنید:", reply_markup=kb)
+
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+
+class AddServiceFSM(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_docs = State()
+    category_id = State()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("add_service_cat_"))
+async def choose_category(callback: types.CallbackQuery, state: FSMContext):
+    category_id = int(callback.data.split("_")[-1])
+    await state.update_data(category_id=category_id)
+    await AddServiceFSM.waiting_for_title.set()
+    await callback.message.answer("📝 عنوان خدمت جدید را بفرستید:")
+
+
+@dp.message_handler(state=AddServiceFSM.waiting_for_title, content_types=types.ContentTypes.TEXT)
+async def get_service_title(msg: types.Message, state: FSMContext):
+    await state.update_data(title=msg.text)
+    await AddServiceFSM.waiting_for_docs.set()
+    await msg.answer("📑 توضیحات و مدارک لازم برای این خدمت را ارسال کنید:")
+
+@dp.message_handler(state=AddServiceFSM.waiting_for_docs, content_types=types.ContentTypes.TEXT)
+async def get_service_docs(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    category_id = data["category_id"]
+    title = data["title"]
+    docs = msg.text
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO services (category_id, title, documents) VALUES ($1, $2, $3)
+        """, category_id, title, docs)
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("➕ افزودن خدمات", callback_data="manage_add_service"),
+        InlineKeyboardButton("⬅️ بازگشت", callback_data="manage_services")
+    )
+    await msg.answer(f"✅ خدمت <b>{title}</b> با موفقیت ثبت شد.", reply_markup=kb)
+    await state.finish()
+
 
 # مرحله ۱: نمایش دسته‌بندی
 @dp.callback_query_handler(lambda c: c.data == "order")
