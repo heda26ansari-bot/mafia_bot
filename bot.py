@@ -144,13 +144,29 @@ async def init_db():
     print("✅ دیتابیس آماده شد.")
 
 # ---------------- کیبورد ----------------
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+
 def main_menu():
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        types.InlineKeyboardButton("🛒 ثبت سفارش", callback_data="order"),
-        types.InlineKeyboardButton("📋 سفارش‌های من", callback_data="my_orders")
-    )
-    return kb
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(KeyboardButton("🛠 سفارش خدمات"))
+    keyboard.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
+    keyboard.add(KeyboardButton("🔔 دریافت خودکار خبر"))
+    return keyboard
+
+def services_menu():
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(KeyboardButton("➕ ثبت سفارش جدید"))
+    keyboard.add(KeyboardButton("📋 سفارش‌های من"))
+    keyboard.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
+    return keyboard
+
+@dp.message_handler(lambda m: m.text == "🛠 سفارش خدمات")
+async def show_services_menu(message: types.Message):
+    await message.answer("📌 لطفاً یک گزینه انتخاب کنید:", reply_markup=services_menu())
+
+@dp.message_handler(lambda m: m.text == "⬅️ بازگشت به منوی اصلی")
+async def back_to_main(message: types.Message):
+    await message.answer("🔙 بازگشت به منوی اصلی", reply_markup=main_menu())
 
 # ---------------- هندلرها ----------------
 @dp.message_handler(commands=["start"])
@@ -164,7 +180,7 @@ async def start_cmd(msg: types.Message):
 
     await msg.answer(
         f"سلام {msg.from_user.first_name} 👋\n"
-        "به ربات سفارش خوش اومدی.",
+        "به ربات کافی نت مجازی خوش اومدی.",
         reply_markup=main_menu()
     )
 
