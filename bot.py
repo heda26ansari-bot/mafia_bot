@@ -2,6 +2,7 @@ import logging
 import asyncpg
 import os
 import uuid
+import json
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -14,6 +15,10 @@ class OrderForm(StatesGroup):
 
 class SearchForm(StatesGroup):
     waiting_for_keyword = State()
+
+class AdminAddService(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_docs = State()
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -166,6 +171,186 @@ async def service_categories_keyboard(prefix: str = "order"):
         kb.add(InlineKeyboardButton(name, callback_data=cb))
 
     return kb
+
+# --------------------------
+# مدیریت (افزودن / حذف) خدمات — FSM-based
+# --------------------------
+
+# 1) شروع افزودن خدمت (ریپلی کیبورد -> '➕ افزودن خدمات')
+@dp.message_handler(lambda m: m.text == "➕ افزودن خدمات")
+async def admin_add_service_start(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return await msg.answer("⛔ شما دسترسی به این بخش ندارید.")
+    # نمایش دسته‌بندی‌ها با callback_data مخصوص ادمین:
+    async with pool.acquire() as conn:
+        cats = await conn.fetch("SELECT id, name FROM service_categories ORDER BY id")
+    kb = InlineKeyboardMarkup(row_width=1)
+    for c in cats:
+        kb.add(InlineKeyboardButton(c["name"], callback_data=f"admin_addcat_{c['id']}"))
+    kb.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back_main"))
+    await msg.answer("📂 یک دسته‌بندی برای افزودن خدمت انتخاب کنید:", reply_markup=kb)
+
+
+# 2) ادمین یک دسته را انتخاب می‌کند -> درخواست عنوان (FSM set)
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("admin_addcat_"))
+async def admin_addcat_choose(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()  # برداشتن لودینگ
+    try:
+        category_id = int(call.data.split("_")[-1])
+    except:
+        return await call.message.answer("❌ داده نامعتبر.")
+    await state.update_data(category_id=category_id, documents=[])
+    await AdminAddService.waiting_for_title.set()
+    await call.message.answer("✍️ لطفاً عنوان خدمت جدید را ارسال کنید:")
+
+
+# 3) دریافت عنوان -> می‌رویم به مرحله دریافت مدارک/توضیحات
+@dp.message_handler(state=AdminAddService.waiting_for_title, content_types=types.ContentTypes.TEXT)
+async def admin_add_title(msg: types.Message, state: FSMContext):
+    title = msg.text.strip()
+    if not title:
+        return await msg.answer("❌ لطفاً یک عنوان معتبر وارد کنید.")
+    await state.update_data(title=title)
+    await AdminAddService.waiting_for_docs.set()
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ ثبت خدمت", callback_data="admin_confirm_add_service"),
+        InlineKeyboardButton("❌ انصراف", callback_data="admin_cancel_add_service"),
+    )
+    await msg.answer(
+        "📑 حالا توضیحات و مدارک لازم برای این خدمت را ارسال کنید.\n"
+        "🔸 می‌توانید چند پیام ارسال کنید.\n"
+        "🔸 پس از اتمام، دکمه «✅ ثبت خدمت» را بزنید.",
+        reply_markup=kb
+    )
+
+
+# 4) دریافت مدارک/پیام‌ها (می‌تواند چند پیام باشد) — فقط ذخیره می‌کنیم (text/file_id/caption)
+@dp.message_handler(state=AdminAddService.waiting_for_docs, content_types=types.ContentTypes.ANY)
+async def admin_add_docs(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    docs = data.get("documents", [])
+
+    entry = {}
+    entry["type"] = msg.content_type
+    if msg.content_type == "text":
+        entry["text"] = msg.text
+    elif msg.content_type == "photo":
+        entry["file_id"] = msg.photo[-1].file_id
+        entry["caption"] = msg.caption or ""
+    elif msg.content_type == "document":
+        entry["file_id"] = msg.document.file_id
+        entry["file_name"] = msg.document.file_name
+        entry["caption"] = msg.caption or ""
+    else:
+        # دیگر نوع‌ها را به صورت خلاصه ثبت کن
+        try:
+            attr = getattr(msg, msg.content_type)
+            entry["file_id"] = getattr(attr, "file_id", None)
+        except Exception:
+            entry["text"] = f"<{msg.content_type} received>"
+
+    docs.append(entry)
+    await state.update_data(documents=docs)
+    await msg.answer("✅ دریافت شد. اگر همه مدارک را فرستادید، دکمه «✅ ثبت خدمت» را بزنید.")
+
+
+# 5) ادمین دکمه ثبت را می‌زند -> ذخیره در DB
+@dp.callback_query_handler(lambda c: c.data == "admin_confirm_add_service", state=AdminAddService.waiting_for_docs)
+async def admin_confirm_add(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    title = data.get("title") or "بدون عنوان"
+    documents = data.get("documents", [])
+
+    # ذخیره به صورت JSON (TEXT در جدول)
+    docs_json = json.dumps(documents, ensure_ascii=False)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO services (category_id, title, documents) VALUES ($1, $2, $3)",
+            category_id, title, docs_json
+        )
+
+    await call.message.answer(f"✅ خدمت «{title}» با موفقیت ثبت شد.", reply_markup=main_menu())
+    await state.finish()
+
+
+# 6) انصراف از افزودن
+@dp.callback_query_handler(lambda c: c.data == "admin_cancel_add_service", state=AdminAddService.waiting_for_docs)
+async def admin_cancel_add(call: types.CallbackQuery, state: FSMContext):
+    await call.answer("❌ افزودن خدمت لغو شد.")
+    await state.finish()
+    await call.message.answer("❌ افزودن خدمت لغو شد.", reply_markup=main_menu())
+
+# شروع حذف: نمایش دسته‌ها با callback admin_delcat_
+@dp.message_handler(lambda m: m.text == "❌ حذف خدمات")
+async def admin_delete_start(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return await msg.answer("⛔ شما دسترسی به این بخش ندارید.")
+    async with pool.acquire() as conn:
+        cats = await conn.fetch("SELECT id, name FROM service_categories ORDER BY id")
+    kb = InlineKeyboardMarkup(row_width=1)
+    for c in cats:
+        kb.add(InlineKeyboardButton(c["name"], callback_data=f"admin_delcat_{c['id']}"))
+    kb.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back_main"))
+    await msg.answer("📂 یک دسته‌بندی برای حذف خدمت انتخاب کنید:", reply_markup=kb)
+
+
+# وقتی ادمین یک دسته را انتخاب کرد -> لیست خدمات آن گروه
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("admin_delcat_"))
+async def admin_delcat_choose(call: types.CallbackQuery):
+    await call.answer()
+    try:
+        cat_id = int(call.data.split("_")[-1])
+    except:
+        return await call.message.answer("❌ داده نامعتبر.")
+    async with pool.acquire() as conn:
+        services = await conn.fetch("SELECT id, title FROM services WHERE category_id=$1 ORDER BY id", cat_id)
+
+    if not services:
+        await call.message.answer("⛔ خدمتی در این دسته موجود نیست.")
+        return
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    for s in services:
+        kb.add(InlineKeyboardButton(f"❌ {s['title']}", callback_data=f"admin_delservice_{s['id']}"))
+    kb.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back_main"))
+    await call.message.answer("🗑 یکی از خدمات را برای حذف انتخاب کنید:", reply_markup=kb)
+
+
+# انتخاب خدمت -> نمایش پیغام تایید (حذف نهایی)
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("admin_delservice_"))
+async def admin_delservice_confirm(call: types.CallbackQuery):
+    await call.answer()
+    service_id = int(call.data.split("_")[-1])
+    async with pool.acquire() as conn:
+        s = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
+    if not s:
+        return await call.message.answer("⛔ خدمت پیدا نشد.")
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ حذف نهایی", callback_data=f"admin_confirm_del_{service_id}"),
+        InlineKeyboardButton("❌ انصراف", callback_data="admin_cancel_del"),
+    )
+    await call.message.answer(f"⚠️ آیا مطمئن هستید که می‌خواهید خدمت «{s['title']}» را حذف کنید؟", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("admin_confirm_del_"))
+async def admin_confirm_del(call: types.CallbackQuery):
+    await call.answer()
+    service_id = int(call.data.split("_")[-1])
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM services WHERE id=$1", service_id)
+    await call.message.answer("✅ خدمت حذف شد.", reply_markup=main_menu())
+
+
+@dp.callback_query_handler(lambda c: c.data == "admin_cancel_del")
+async def admin_cancel_del(call: types.CallbackQuery):
+    await call.answer("❌ حذف لغو شد.")
+    await call.message.answer("❌ حذف لغو شد.", reply_markup=main_menu())
 
 
 # بازگشت به منوی اصلی
@@ -790,128 +975,6 @@ async def cmd_add_service_menu(msg: types.Message):
     kb = await service_categories_keyboard(prefix="add")
     await msg.answer("📂 لطفاً دسته‌بندی موردنظر برای افزودن خدمت را انتخاب کنید:", reply_markup=kb)
 
-
-# ==========================
-#  مرحله: کاربر روی یک دسته برای افزودن خدمت کلیک می‌کنه
-#  callback_data = addcat_{category_id}
-# ==========================
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("addcat_"))
-async def process_add_service_category(call: types.CallbackQuery):
-    await bot.answer_callback_query(call.id)  # برداشتن لودینگی
-
-    try:
-        category_id = int(call.data.split("_", 1)[1])
-    except Exception:
-        await call.message.answer("❌ دادهٔ نامعتبر.")
-        return
-
-    # ست کردن وضعیت موقت کاربر
-    user_flow[call.from_user.id] = {
-        "flow": "add_service",
-        "step": "title",        # مرحلهٔ فعلی: دریافت عنوان
-        "category_id": category_id,
-        "title": None,
-        "documents": []        # لیستی از پیام‌ها/متن‌هایی که کاربر می‌فرسته
-    }
-
-    await call.message.answer("✍️ لطفاً *عنوان* خدمت جدید را ارسال کنید.", parse_mode="Markdown")
-
-
-# ==========================
-#  دریافت پیام‌های مرحله‌ای برای افزودن خدمت
-#  - مرحله title: دریافت عنوان -> سپس مرحله desc
-#  - مرحله desc: دریافت متن/مدارک (چند پیام)؛ کاربر در نهایت دکمهٔ '✅ ثبت خدمت' را می‌زند
-# ==========================
-@dp.message_handler(lambda m: m.from_user.id in user_flow and user_flow[m.from_user.id].get("flow") == "add_service")
-async def add_service_steps(msg: types.Message):
-    uid = msg.from_user.id
-    data = user_flow.get(uid)
-    if not data:
-        return
-
-    # مرحله عنوان
-    if data["step"] == "title":
-        title = msg.text.strip()
-        if not title:
-            await msg.answer("❌ لطفاً یک عنوان معتبر ارسال کنید.")
-            return
-
-        data["title"] = title
-        data["step"] = "desc"
-
-        # دکمهٔ ثبت خدمت (اینلاین)
-        kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("✅ ثبت خدمت", callback_data="confirm_add_service"))
-        kb.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_add_service"))
-
-        await msg.answer(
-            "📝 حالا توضیحات و مدارک لازم برای این خدمت را ارسال کنید.\n"
-            "🔸 می‌توانید چند پیام ارسال کنید.\n"
-            "🔸 پس از اتمام، دکمهٔ «✅ ثبت خدمت» را بزنید.",
-            reply_markup=kb
-        )
-        return
-
-    # مرحله جمع‌آوری مدارک/توضیحات (می‌تواند چند پیام باشد)
-    if data["step"] == "desc":
-        # برای هر پیام متن، عکس، سند و غیره، ما متن یا شناسه را ذخیره می‌کنیم.
-        # اینجا ساده‌ترین حالت: متن‌ها را جمع می‌کنیم؛ برای فایل‌ها شناسهٔ file_id نیز ذخیره می‌کنیم.
-        entry = {}
-        entry["content_type"] = msg.content_type
-        if msg.content_type == "text":
-            entry["text"] = msg.text
-        elif msg.content_type == "photo":
-            entry["file_id"] = msg.photo[-1].file_id
-            entry["caption"] = msg.caption or ""
-        elif msg.content_type == "document":
-            entry["file_id"] = msg.document.file_id
-            entry["file_name"] = msg.document.file_name
-            entry["caption"] = msg.caption or ""
-        else:
-            # برای سایر نوع‌ها هم ذخیرهٔ فایل_id یا متن
-            try:
-                entry["file_id"] = getattr(msg, msg.content_type).file_id
-            except Exception:
-                entry["text"] = f"<{msg.content_type} received>"
-
-        data["documents"].append(entry)
-        await msg.answer("✅ دریافت شد. اگر همهٔ مدارک را فرستادید، دکمهٔ «✅ ثبت خدمت» را بزنید. در غیر اینصورت ادامه بدید یا «❌ انصراف» را بزنید.")
-
-
-# ==========================
-#  کاربر دکمهٔ 'ثبت خدمت' یا 'انصراف' میزنه
-# ==========================
-@dp.callback_query_handler(lambda c: c.data in ("confirm_add_service", "cancel_add_service"))
-async def handle_confirm_or_cancel_add_service(call: types.CallbackQuery):
-    await bot.answer_callback_query(call.id)
-
-    uid = call.from_user.id
-    data = user_flow.get(uid)
-    if not data or data.get("flow") != "add_service":
-        await call.message.answer("⛔ فرایند افزودن خدمتی در حال انجام نیست.")
-        return
-
-    if call.data == "cancel_add_service":
-        del user_flow[uid]
-        await call.message.answer("❌ افزودن خدمت لغو شد.", reply_markup=main_menu())
-        return
-
-    # confirm_add_service: ثبت در دیتابیس
-    category_id = data["category_id"]
-    title = data["title"] or "بدون عنوان"
-    # تبدیل documents به متن ساده برای ذخیره — میتونی JSON هم ذخیره کنی
-    # این مثال متن‌های ارسالی و file_idها را در قالب JSON ذخیره میکند
-    import json
-    docs_json = json.dumps(data["documents"], ensure_ascii=False)
-
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO services (category_id, title, documents) VALUES ($1, $2, $3)",
-            category_id, title, docs_json
-        )
-
-    del user_flow[uid]
-    await call.message.answer(f"✅ خدمت «{title}» با موفقیت ثبت شد.", reply_markup=main_menu())
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
