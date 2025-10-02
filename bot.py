@@ -1,6 +1,7 @@
 import logging
 import asyncpg
 import os
+import uuid
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -231,21 +232,24 @@ async def process_category(callback_query: types.CallbackQuery):
 async def process_service(callback_query: types.CallbackQuery):
     service_id = int(callback_query.data.split("_")[1])
 
+    # تولید کد سفارش (۸ کاراکتری یکتا)
+    order_code = str(uuid.uuid4())[:8]
+
     async with pool.acquire() as conn:
-        # ثبت سفارش
         await conn.execute("""
-            INSERT INTO orders (user_id, service_id) VALUES ($1, $2)
-        """, callback_query.from_user.id, service_id)
+            INSERT INTO orders (user_id, service_id, order_code, status)
+            VALUES ($1, $2, $3, 'new')
+        """, callback_query.from_user.id, service_id, order_code)
 
-        # گرفتن اطلاعات سرویس
-        service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
+        service = await conn.fetchrow(
+            "SELECT title FROM services WHERE id=$1", service_id
+        )
 
-    # این خط خیلی مهمه برای جلوگیری از لودینگ بی‌پایان
-    await callback_query.answer()
-
-    # ارسال پیام تأیید
-    await callback_query.message.answer(
-        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.",
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
+        f"کد پیگیری: <code>{order_code}</code>",
         reply_markup=main_menu()
     )
 
