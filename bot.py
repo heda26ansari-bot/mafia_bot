@@ -142,18 +142,23 @@ async def process_service(callback_query: types.CallbackQuery):
     service_id = int(callback_query.data.split("_")[1])
 
     async with pool.acquire() as conn:
+        # ثبت سفارش
         await conn.execute("""
             INSERT INTO orders (user_id, service_id) VALUES ($1, $2)
         """, callback_query.from_user.id, service_id)
 
+        # گرفتن اطلاعات سرویس
         service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
 
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(
-        callback_query.from_user.id,
+    # این خط خیلی مهمه برای جلوگیری از لودینگ بی‌پایان
+    await callback_query.answer()
+
+    # ارسال پیام تأیید
+    await callback_query.message.answer(
         f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.",
         reply_markup=main_menu()
     )
+
 
 # مشاهده سفارش‌های کاربر
 @dp.callback_query_handler(lambda c: c.data == "my_orders")
