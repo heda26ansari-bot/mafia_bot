@@ -6,9 +6,13 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher import FSMContext
 
 class OrderForm(StatesGroup):
     waiting_for_documents = State()
+
+class SearchForm(StatesGroup):
+    waiting_for_keyword = State()
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -127,8 +131,15 @@ async def init_db():
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
         """)
-
-
+        
+        # 📌 جدول جدید برای订 خبر
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            user_id BIGINT,
+            hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
+            PRIMARY KEY (user_id, hashtag_id)
+        )
+        """)
 
     print("✅ دیتابیس آماده شد.")
 
@@ -462,6 +473,124 @@ async def my_orders(callback_query: types.CallbackQuery):
 async def back_main(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "🏠 منوی اصلی:", reply_markup=main_menu())
+
+# مرحله ۱: درخواست کلیدواژه
+@dp.message_handler(lambda m: m.text == "🔍 جستجو در اطلاعیه/خبر")
+async def ask_keyword(msg: types.Message):
+    await msg.answer("🔎 لطفاً کلیدواژه مورد نظر خود را وارد کنید:")
+    await SearchForm.waiting_for_keyword.set()
+
+# مرحله ۲: جستجو
+@dp.message_handler(state=SearchForm.waiting_for_keyword)
+async def search_posts(msg: types.Message, state: FSMContext):
+    keyword = msg.text
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT p.id, p.title, p.content, array_agg(h.name) AS hashtags
+            FROM posts p
+            LEFT JOIN post_hashtags ph ON p.id = ph.post_id
+            LEFT JOIN hashtags h ON ph.hashtag_id = h.id
+            WHERE p.title ILIKE $1
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+            LIMIT 5
+        """, f"%{keyword}%")
+
+    if not rows:
+        await msg.answer("⛔ هیچ خبری با این کلیدواژه یافت نشد.")
+        await state.finish()
+        return
+
+    for row in rows:
+        summary = (row["content"][:100] + "...") if row["content"] else "⛔ بدون توضیحات"
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔽 نمایش کامل خبر", callback_data=f"full_{row['id']}"))
+
+        # دکمه هشتگ‌ها
+        if row["hashtags"]:
+            for h in row["hashtags"]:
+                kb.add(InlineKeyboardButton(f"#{h}", callback_data=f"tag_{h}"))
+
+        await msg.answer(
+            f"📌 <b>{row['title']}</b>\n\n"
+            f"📝 {summary}",
+            reply_markup=kb
+        )
+
+    await state.finish()
+
+# مرحله ۳: نمایش کامل خبر
+@dp.callback_query_handler(lambda c: c.data.startswith("full_"))
+async def show_full(callback_query: types.CallbackQuery):
+    post_id = int(callback_query.data.split("_")[1])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT title, content FROM posts WHERE id=$1", post_id)
+
+    if row:
+        await bot.send_message(
+            callback_query.from_user.id,
+            f"📌 <b>{row['title']}</b>\n\n{row['content']}"
+        )
+
+    await bot.answer_callback_query(callback_query.id)
+
+# مرحله ۴: نمایش پست‌های مرتبط با هشتگ
+@dp.callback_query_handler(lambda c: c.data.startswith("tag_"))
+async def show_tag_posts(callback_query: types.CallbackQuery):
+    tag = callback_query.data.split("_")[1]
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT p.title, p.content
+            FROM posts p
+            JOIN post_hashtags ph ON p.id = ph.post_id
+            JOIN hashtags h ON ph.hashtag_id = h.id
+            WHERE h.name=$1
+            ORDER BY p.created_at DESC
+            LIMIT 5
+        """, tag)
+
+    if not rows:
+        await bot.send_message(callback_query.from_user.id, "⛔ خبری برای این هشتگ یافت نشد.")
+    else:
+        for row in rows:
+            summary = (row["content"][:100] + "...") if row["content"] else "⛔ بدون توضیحات"
+            await bot.send_message(
+                callback_query.from_user.id,
+                f"📌 <b>{row['title']}</b>\n\n📝 {summary}"
+            )
+
+    await bot.answer_callback_query(callback_query.id)
+
+@dp.message_handler(lambda m: m.text == "🔔 دریافت خودکار خبر")
+async def show_subscriptions(msg: types.Message):
+    async with pool.acquire() as conn:
+        hashtags = await conn.fetch("SELECT id, name FROM hashtags ORDER BY name")
+        user_subs = await conn.fetch("SELECT hashtag_id FROM subscriptions WHERE user_id=$1", msg.from_user.id)
+        user_subs_ids = [r["hashtag_id"] for r in user_subs]
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    for h in hashtags:
+        status = "✅" if h["id"] in user_subs_ids else "❌"
+        kb.insert(InlineKeyboardButton(f"{status} #{h['name']}", callback_data=f"sub_{h['id']}"))
+
+    await msg.answer("🔔 هشتگ‌هایی که می‌خواهید خبرهایشان خودکار برایتان ارسال شود را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("sub_"))
+async def toggle_subscription(callback_query: types.CallbackQuery):
+    hashtag_id = int(callback_query.data.split("_")[1])
+    user_id = callback_query.from_user.id
+
+    async with pool.acquire() as conn:
+        exists = await conn.fetchrow("SELECT 1 FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2", user_id, hashtag_id)
+        if exists:
+            await conn.execute("DELETE FROM subscriptions WHERE user_id=$1 AND hashtag_id=$2", user_id, hashtag_id)
+        else:
+            await conn.execute("INSERT INTO subscriptions (user_id, hashtag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", user_id, hashtag_id)
+
+    # رفرش منو
+    await show_subscriptions(callback_query.message)
+    await bot.answer_callback_query(callback_query.id, "✅ بروزرسانی شد")
+
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
