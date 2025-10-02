@@ -27,6 +27,8 @@ bot = Bot(token=API_TOKEN, parse_mode="HTML")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
+user_flow: dict[int, dict] = {}
+
 pool = None  # اتصال دیتابیس
 
 # ---------------- دیتابیس ----------------
