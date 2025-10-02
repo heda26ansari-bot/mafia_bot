@@ -5,12 +5,17 @@ import uuid
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.dispatcher.filters.state import State, StatesGroup
+
+class OrderForm(StatesGroup):
+    waiting_for_documents = State()
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 logging.basicConfig(level=logging.INFO)
+ADMIN_ID = 7918162941
 
 # ---------------- اتصال بات ----------------
 bot = Bot(token=API_TOKEN, parse_mode="HTML")
@@ -226,6 +231,147 @@ async def process_category(callback_query: types.CallbackQuery):
 
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "🔎 یکی از خدمات زیر را انتخاب کنید:", reply_markup=kb)
+
+
+# شروع فرم بعد از انتخاب خدمت
+@dp.callback_query_handler(lambda c: c.data.startswith("service_"))
+async def start_order_form(callback_query: types.CallbackQuery, state: FSMContext):
+    service_id = int(callback_query.data.split("_")[1])
+
+    async with pool.acquire() as conn:
+        service = await conn.fetchrow(
+            "SELECT title, documents FROM services WHERE id=$1", service_id
+        )
+
+    await state.update_data(service_id=service_id, documents=[])
+
+    # ارسال توضیحات خدمت و درخواست مدارک
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"📌 <b>{service['title']}</b>\n\n"
+        f"مدارک لازم: {service['documents']}\n\n"
+        "لطفاً مدارک و توضیحات لازم را ارسال کنید.\n"
+        "می‌توانید چند پیام مختلف بفرستید.\n"
+        "وقتی آماده شدید، روی دکمه زیر بزنید 👇",
+        reply_markup=InlineKeyboardMarkup().add(
+            InlineKeyboardButton("✅ ثبت سفارش", callback_data="submit_order")
+        )
+    )
+
+    await OrderForm.waiting_for_documents.set()
+
+# دریافت پیام‌های کاربر (مدارک / متن / فایل)
+
+@dp.message_handler(state=OrderForm.waiting_for_documents, content_types=types.ContentTypes.ANY)
+async def collect_documents(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    documents = data.get("documents", [])
+
+    # ذخیره فقط متن کوتاه برای دیتابیس (نه فایل واقعی)
+    if message.text:
+        documents.append(message.text)
+    elif message.photo:
+        documents.append("📷 عکس ارسال شد")
+    elif message.document:
+        documents.append(f"📄 فایل: {message.document.file_name}")
+    else:
+        documents.append("📝 مدرک ارسال شد")
+
+    await state.update_data(documents=documents)
+
+    await message.answer("✅ مدرک شما ثبت شد. می‌توانید مدارک بیشتری ارسال کنید یا روی «ثبت سفارش» بزنید.")
+    
+    msg_ids = data.get("messages", [])
+    msg_ids.append(message.message_id)
+    await state.update_data(messages=msg_ids)
+
+
+
+# ثبت سفارش نهایی
+@dp.callback_query_handler(lambda c: c.data == "submit_order", state=OrderForm.waiting_for_documents)
+async def submit_order(callback_query: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    service_id = data["service_id"]
+    documents = "\n".join(data["documents"]) if data["documents"] else "⛔ مدرکی ارسال نشد"
+
+    order_code = str(uuid.uuid4())[:8]
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO orders (user_id, service_id, order_code, docs, status)
+            VALUES ($1, $2, $3, $4, 'new')
+        """, callback_query.from_user.id, service_id, order_code, documents)
+
+        service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
+
+    # پیام به کاربر
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
+        f"کد رهگیری: <code>{order_code}</code>",
+        reply_markup=main_menu()
+    )
+
+    # پیام به مدیر (اطلاعات کلی سفارش)
+    mention = f"<a href='tg://user?id={callback_query.from_user.id}'>{callback_query.from_user.full_name}</a>"
+
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("✅ تکمیل سفارش", callback_data=f"complete_{order_code}"))
+    
+    await bot.send_message(
+        ADMIN_ID,
+        f"📢 سفارش جدید ثبت شد\n"
+        f"👤 مشتری: {mention}\n"
+        f"📌 خدمت: {service['title']}\n"
+        f"📎 کد رهگیری: <code>{order_code}</code>\n\n"
+        f"📝 مدارک ارسالی در ادامه فوروارد می‌شوند 👇"
+        reply_markup=keyboard
+    )
+
+    # 🔹 فوروارد همه مدارک به مدیر
+    history = await state.get_data()
+    msg_ids = history.get("messages", [])
+    for msg_id in msg_ids:
+        try:
+            await bot.forward_message(ADMIN_ID, callback_query.from_user.id, msg_id)
+        except Exception as e:
+            print("⚠️ خطا در فوروارد:", e)
+
+    await state.finish()
+    await bot.answer_callback_query(callback_query.id)
+
+# هندلر برای تکمیل سفارش
+@dp.callback_query_handler(lambda c: c.data.startswith("complete_"))
+async def complete_order(callback_query: types.CallbackQuery):
+    order_code = callback_query.data.split("_")[1]
+
+    async with pool.acquire() as conn:
+        # گرفتن سفارش برای پیدا کردن user_id
+        order = await conn.fetchrow("SELECT user_id FROM orders WHERE order_code=$1", order_code)
+        if not order:
+            await bot.answer_callback_query(callback_query.id, "⛔ سفارش پیدا نشد.", show_alert=True)
+            return
+
+        user_id = order["user_id"]
+
+        # تغییر وضعیت به completed و پاک کردن مدارک
+        await conn.execute("""
+            UPDATE orders
+            SET status='completed', docs=NULL
+            WHERE order_code=$1
+        """, order_code)
+
+    # پیام به مدیر
+    await bot.answer_callback_query(callback_query.id, "✅ سفارش تکمیل شد.", show_alert=True)
+
+    # پیام به کاربر
+    await bot.send_message(
+        user_id,
+        f"🎉 سفارش شما با کد رهگیری <code>{order_code}</code> در حالت <b>تکمیل شده</b> قرار گرفت."
+    )
+
+
+
 
 # مرحله ۳: ثبت سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("service_"))
