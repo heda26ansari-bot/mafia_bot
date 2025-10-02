@@ -27,8 +27,6 @@ bot = Bot(token=API_TOKEN, parse_mode="HTML")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-user_flow: dict[int, dict] = {}
-
 pool = None  # اتصال دیتابیس
 
 # ---------------- دیتابیس ----------------
@@ -740,6 +738,44 @@ async def toggle_subscription(callback_query: types.CallbackQuery):
 
     await callback_query.message.edit_reply_markup(reply_markup=keyboard)
     await callback_query.answer("وضعیت بروزرسانی شد ✅")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("order_cat_"))
+async def process_order_category(call: types.CallbackQuery):
+    category_id = int(call.data.split("_")[2])
+    # گرفتن لیست خدمات این دسته
+    async with pool.acquire() as conn:
+        services = await conn.fetch("SELECT id, title FROM services WHERE category_id=$1", category_id)
+    if not services:
+        await call.message.edit_text("⛔ خدمتی برای این دسته ثبت نشده.")
+        return
+    kb = InlineKeyboardMarkup()
+    for s in services:
+        kb.add(InlineKeyboardButton(s["title"], callback_data=f"order_service_{s['id']}"))
+    await call.message.edit_text("📋 یکی از خدمات را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_cat_"))
+async def process_delete_category(call: types.CallbackQuery):
+    category_id = int(call.data.split("_")[2])
+    async with pool.acquire() as conn:
+        services = await conn.fetch("SELECT id, title FROM services WHERE category_id=$1", category_id)
+    if not services:
+        await call.message.edit_text("⛔ خدمتی در این دسته وجود ندارد.")
+        return
+    kb = InlineKeyboardMarkup()
+    for s in services:
+        kb.add(InlineKeyboardButton(f"❌ {s['title']}", callback_data=f"delete_service_{s['id']}"))
+    await call.message.edit_text("🗑 یکی از خدمات را برای حذف انتخاب کنید:", reply_markup=kb)
+
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_service_"))
+async def process_delete_service(call: types.CallbackQuery):
+    service_id = int(call.data.split("_")[2])
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM services WHERE id=$1", service_id)
+    await call.answer("✅ خدمت حذف شد", show_alert=True)
+    await call.message.edit_text("خدمت با موفقیت حذف شد.", reply_markup=await main_menu())
+
 
 # ==========================
 #  مرحله: کاربر میزند ➕ افزودن خدمات (در ریپلای کیبورد)
