@@ -3,8 +3,6 @@ import asyncpg
 import os
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,11 +16,6 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 pool = None  # اتصال دیتابیس
-
-# ---------------- State ها ----------------
-class OrderFSM(StatesGroup):
-    waiting_for_file = State()
-    service_id = State()
 
 # ---------------- دیتابیس ----------------
 async def init_db():
@@ -64,7 +57,6 @@ async def init_db():
             id SERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
             service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-            file_id TEXT,
             created_at TIMESTAMP DEFAULT now()
         );
         """)
@@ -144,43 +136,22 @@ async def process_category(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "🔎 یکی از خدمات زیر را انتخاب کنید:", reply_markup=kb)
 
-# مرحله ۳: انتخاب سرویس → درخواست فایل
+# مرحله ۳: ثبت سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("service_"))
-async def process_service(callback_query: types.CallbackQuery, state: FSMContext):
+async def process_service(callback_query: types.CallbackQuery):
     service_id = int(callback_query.data.split("_")[1])
-    await state.update_data(service_id=service_id)
-    await OrderFSM.waiting_for_file.set()
-
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id, "📎 لطفاً فایل/مدرک مورد نظر خود را ارسال کنید:")
-
-# مرحله ۴: دریافت فایل و ثبت سفارش
-@dp.message_handler(content_types=["document", "photo"], state=OrderFSM.waiting_for_file)
-async def handle_file(msg: types.Message, state: FSMContext):
-    data = await state.get_data()
-    service_id = data["service_id"]
-
-    # گرفتن file_id
-    if msg.document:
-        file_id = msg.document.file_id
-    elif msg.photo:
-        file_id = msg.photo[-1].file_id
-    else:
-        await msg.answer("❌ لطفاً فقط فایل یا عکس ارسال کنید.")
-        return
 
     async with pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO orders (user_id, service_id, file_id)
-            VALUES ($1, $2, $3)
-        """, msg.from_user.id, service_id, file_id)
+            INSERT INTO orders (user_id, service_id) VALUES ($1, $2)
+        """, callback_query.from_user.id, service_id)
 
         service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
 
-    await state.finish()
-    await msg.answer(
-        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
-        "کارشناسان ما به زودی بررسی می‌کنند.",
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.",
         reply_markup=main_menu()
     )
 
