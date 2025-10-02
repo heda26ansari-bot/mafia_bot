@@ -288,57 +288,69 @@ async def collect_documents(message: types.Message, state: FSMContext):
 
 
 # ثبت سفارش نهایی
+import uuid
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 @dp.callback_query_handler(lambda c: c.data == "submit_order", state=OrderForm.waiting_for_documents)
 async def submit_order(callback_query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    service_id = data["service_id"]
-    documents = "\n".join(data["documents"]) if data["documents"] else "⛔ مدرکی ارسال نشد"
+    service_id = data.get("service_id")
+    documents_list = data.get("documents", [])          # متن خلاصه مدارک برای ذخیره در DB
+    msg_ids = data.get("messages", [])                  # شناسهٔ پیام‌ها برای فوروارد
 
+    documents_text = "\n".join(documents_list) if documents_list else "⛔ مدرکی ارسال نشد"
     order_code = str(uuid.uuid4())[:8]
 
     async with pool.acquire() as conn:
-        await conn.execute("""
+        await conn.execute(
+            """
             INSERT INTO orders (user_id, service_id, order_code, docs, status)
             VALUES ($1, $2, $3, $4, 'new')
-        """, callback_query.from_user.id, service_id, order_code, documents)
-
+            """,
+            callback_query.from_user.id, service_id, order_code, documents_text
+        )
         service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
 
-    # پیام به کاربر
-    await bot.send_message(
-        callback_query.from_user.id,
+    # پیام تأیید به کاربر (در همان چت)
+    await callback_query.message.answer(
         f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
         f"کد رهگیری: <code>{order_code}</code>",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
+        parse_mode="HTML"
     )
 
-    # پیام به مدیر (اطلاعات کلی سفارش)
-    mention = f"<a href='tg://user?id={callback_query.from_user.id}'>{callback_query.from_user.full_name}</a>"
+    # آماده‌سازی منشن امن (fallback برای first/last/username)
+    user = callback_query.from_user
+    full_name = (user.first_name or "") + ((" " + user.last_name) if getattr(user, "last_name", None) else "")
+    mention = f"<a href='tg://user?id={user.id}'>{full_name or user.username or user.id}</a>"
 
+    # پیام به مدیر با دکمه "تکمیل سفارش"
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("✅ تکمیل سفارش", callback_data=f"complete_{order_code}"))
-    
+
     await bot.send_message(
         ADMIN_ID,
         f"📢 سفارش جدید ثبت شد\n"
         f"👤 مشتری: {mention}\n"
         f"📌 خدمت: {service['title']}\n"
         f"📎 کد رهگیری: <code>{order_code}</code>\n\n"
-        f"📝 مدارک ارسالی در ادامه فوروارد می‌شوند 👇"
-        reply_markup=keyboard
+        f"📝 مدارک ارسالی در ادامه فوروارد می‌شوند 👇",
+        reply_markup=keyboard,
+        parse_mode="HTML"
     )
 
-    # 🔹 فوروارد همه مدارک به مدیر
-    history = await state.get_data()
-    msg_ids = history.get("messages", [])
-    for msg_id in msg_ids:
+    # فوروارد کردن همهٔ پیام‌های مدارک به مدیر (با همان فرمت اصلی)
+    for mid in msg_ids:
         try:
-            await bot.forward_message(ADMIN_ID, callback_query.from_user.id, msg_id)
+            await bot.forward_message(ADMIN_ID, callback_query.from_user.id, mid)
         except Exception as e:
-            print("⚠️ خطا در فوروارد:", e)
+            # لاگ خطا ولی ادامه بده
+            print("⚠️ خطا در فوروارد پیام:", e)
 
+    # پایان FSM و پاسخ به callback تا دک لودینگ برداشته شود
     await state.finish()
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer("سفارش شما ثبت شد ✅")
+
 
 # هندلر برای تکمیل سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("complete_"))
