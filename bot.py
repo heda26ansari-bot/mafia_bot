@@ -62,6 +62,17 @@ async def init_db():
         );
         """)
 
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+            service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+            docs TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """)
+
+
         # داده‌ی تستی (فقط بار اول)
         await conn.execute("""
         INSERT INTO service_categories (name) VALUES ('مدارک شخصی'), ('مدارک شرکتی')
@@ -79,6 +90,17 @@ async def init_db():
         INSERT INTO services (category_id, title)
         SELECT 2, 'ثبت شرکت' WHERE NOT EXISTS (SELECT 1 FROM services WHERE title='ثبت شرکت');
         """)
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
+        """)
+        # اطمینان از وجود ستون service_id
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
+        """)
+
+
 
     print("✅ دیتابیس آماده شد.")
 
