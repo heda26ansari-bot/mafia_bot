@@ -146,7 +146,18 @@ def orders_menu():
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
     return kb
 
+async def service_categories_keyboard():
+    kb = InlineKeyboardMarkup()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, name FROM service_categories ORDER BY id")
 
+    if not rows:
+        kb.add(InlineKeyboardButton("⛔ هیچ دسته‌بندی وجود ندارد", callback_data="none"))
+    else:
+        for r in rows:
+            kb.add(InlineKeyboardButton(r["name"], callback_data=f"cat_{r['id']}"))
+
+    return kb
 
 
 # بازگشت به منوی اصلی
@@ -163,7 +174,7 @@ async def show_orders_menu(message: types.Message):
 # ===== سفارش خدمات =====
 @dp.message_handler(lambda m: m.text == "➕ ثبت سفارش")
 async def add_order(message: types.Message):
-    # اینجا منطق همون بخش انتخاب دسته‌بندی خدماتت رو بذار
+    kb = await service_categories_keyboard()
     await message.answer("📋 لطفاً یک دسته‌بندی برای سفارش انتخاب کنید:", reply_markup=await service_categories_keyboard())
 
 
@@ -200,6 +211,23 @@ async def manage_services(message: types.Message):
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
 
     await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
+    
+
+@dp.message_handler(lambda m: m.text == "➕ افزودن خدمات")
+async def add_service_start(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("⛔ شما دسترسی به این بخش ندارید.")
+
+    kb = await service_categories_keyboard()
+    await message.answer("📂 یک دسته‌بندی برای افزودن خدمت انتخاب کنید:", reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "❌ حذف خدمات")
+async def delete_service_start(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("⛔ شما دسترسی به این بخش ندارید.")
+
+    kb = await service_categories_keyboard()
+    await message.answer("📂 یک دسته‌بندی برای حذف خدمت انتخاب کنید:", reply_markup=kb)
 
 
 
