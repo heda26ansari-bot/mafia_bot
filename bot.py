@@ -128,6 +128,34 @@ async def init_db():
             PRIMARY KEY (user_id, hashtag_id)
         )
         """)
+        
+        # جدول پست‌ها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS posts (
+            id SERIAL PRIMARY KEY,
+            message_id BIGINT UNIQUE,
+            title TEXT,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        )
+        """)
+        # جدول هشتگ‌ها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS hashtags (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE
+        )
+        """)
+
+        # رابطه بین پست‌ها و هشتگ‌ها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS post_hashtags (
+            post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+            hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
+            PRIMARY KEY (post_id, hashtag_id)
+        )
+        """)
+
 
     print("✅ دیتابیس آماده شد.")
 
@@ -150,7 +178,9 @@ def orders_menu():
     kb.add(KeyboardButton("📦 سفارش‌های من"))
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
     return kb
-
+# ===========================
+# کیبورد دسته بندی
+# ===========================
 async def service_categories_keyboard(prefix: str = "order"):
     kb = InlineKeyboardMarkup(row_width=2)
     async with pool.acquire() as conn:
@@ -162,12 +192,7 @@ async def service_categories_keyboard(prefix: str = "order"):
     for r in rows:
         cid = r["id"]
         name = r["name"]
-        if prefix == "add":
-            cb = f"addcat_{cid}"
-        elif prefix == "del":
-            cb = f"delcat_{cid}"
-        else:
-            cb = f"ordercat_{cid}"
+        cb = f"{prefix}_cat_{cid}"
         kb.add(InlineKeyboardButton(name, callback_data=cb))
 
     return kb
@@ -938,6 +963,9 @@ async def process_order_category(call: types.CallbackQuery):
         kb.add(InlineKeyboardButton(s["title"], callback_data=f"order_service_{s['id']}"))
     await call.message.edit_text("📋 یکی از خدمات را انتخاب کنید:", reply_markup=kb)
 
+# ==========================
+#  حذف خدمات
+# ==========================
 @dp.callback_query_handler(lambda c: c.data.startswith("delete_cat_"))
 async def process_delete_category(call: types.CallbackQuery):
     category_id = int(call.data.split("_")[2])
@@ -952,14 +980,13 @@ async def process_delete_category(call: types.CallbackQuery):
     await call.message.edit_text("🗑 یکی از خدمات را برای حذف انتخاب کنید:", reply_markup=kb)
 
 
-
 @dp.callback_query_handler(lambda c: c.data.startswith("delete_service_"))
 async def process_delete_service(call: types.CallbackQuery):
     service_id = int(call.data.split("_")[2])
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM services WHERE id=$1", service_id)
     await call.answer("✅ خدمت حذف شد", show_alert=True)
-    await call.message.edit_text("خدمت با موفقیت حذف شد.", reply_markup=await main_menu())
+    await call.message.edit_text("خدمت با موفقیت حذف شد.", reply_markup=main_menu())
 
 
 # ==========================
@@ -974,6 +1001,65 @@ async def cmd_add_service_menu(msg: types.Message):
 
     kb = await service_categories_keyboard(prefix="add")
     await msg.answer("📂 لطفاً دسته‌بندی موردنظر برای افزودن خدمت را انتخاب کنید:", reply_markup=kb)
+
+# ======================
+# ذخیره پست‌های جدید کانال
+# ======================
+@dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
+async def save_channel_post(message: types.Message):
+    text = message.text or message.caption or ""
+    title = text.split("\n")[0][:100] if text else "بدون عنوان"
+
+    async with pool.acquire() as conn:
+        # ذخیره پست
+        post = await conn.fetchrow("""
+            INSERT INTO posts (message_id, title, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (message_id) DO NOTHING
+            RETURNING id
+        """, message.message_id, title, text)
+
+        if not post:
+            return
+
+        post_id = post["id"]
+
+        # استخراج هشتگ‌ها و ذخیره
+        hashtags = [word.strip("#") for word in text.split() if word.startswith("#")]
+        for tag in hashtags:
+            tag_row = await conn.fetchrow("""
+                INSERT INTO hashtags (name) VALUES ($1)
+                ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
+                RETURNING id
+            """, tag)
+            await conn.execute("""
+                INSERT INTO post_hashtags (post_id, hashtag_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+            """, post_id, tag_row["id"])
+
+
+# ==========================
+#  دریافت پست ها و هشتگ ها از کانال
+# ==========================
+@dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
+async def handle_channel_post(msg: types.Message):
+    async with pool.acquire() as conn:
+        # ذخیره پست
+        post_id = await conn.fetchval("""
+            INSERT INTO posts (message_id, title, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (message_id) DO UPDATE SET title=$2, content=$3
+            RETURNING id
+        """, msg.message_id, msg.text.split("\n")[0], msg.text)
+
+        # استخراج هشتگ‌ها
+        if msg.entities:
+            for ent in msg.entities:
+                if ent.type == "hashtag":
+                    tag = msg.text[ent.offset:ent.offset+ent.length].lstrip("#")
+                    ht = await conn.fetchrow("INSERT INTO hashtags(name) VALUES($1) ON CONFLICT(name) DO UPDATE SET name=$1 RETURNING id", tag)
+                    await conn.execute("INSERT INTO post_hashtags(post_id, hashtag_id) VALUES($1,$2) ON CONFLICT DO NOTHING", post_id, ht["id"])
 
 
 # ---------------- راه‌اندازی ----------------
