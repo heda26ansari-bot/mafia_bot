@@ -713,58 +713,6 @@ async def complete_order(callback_query: types.CallbackQuery):
     )
 
 
-
-
-# مرحله ۳: ثبت سفارش
-@dp.callback_query_handler(lambda c: c.data.startswith("service_"))
-async def process_service(callback_query: types.CallbackQuery):
-    service_id = int(callback_query.data.split("_")[1])
-
-    # تولید کد سفارش (۸ کاراکتری یکتا)
-    order_code = str(uuid.uuid4())[:8]
-
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO orders (user_id, service_id, order_code, status)
-            VALUES ($1, $2, $3, 'new')
-        """, callback_query.from_user.id, service_id, order_code)
-
-        service = await conn.fetchrow(
-            "SELECT title FROM services WHERE id=$1", service_id
-        )
-
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(
-        callback_query.from_user.id,
-        f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
-        f"کد پیگیری: <code>{order_code}</code>",
-        reply_markup=main_menu()
-    )
-
-
-# مشاهده سفارش‌های کاربر
-@dp.callback_query_handler(lambda c: c.data == "my_orders")
-async def my_orders(callback_query: types.CallbackQuery):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT o.id, s.title, o.created_at
-            FROM orders o
-            JOIN services s ON o.service_id = s.id
-            WHERE o.user_id=$1
-            ORDER BY o.created_at DESC
-            LIMIT 5
-        """, callback_query.from_user.id)
-
-    if not rows:
-        text = "📭 شما هنوز سفارشی ثبت نکردید."
-    else:
-        text = "📋 آخرین سفارش‌های شما:\n\n"
-        for r in rows:
-            text += f"🆔 {r['id']} | {r['title']} | {r['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
-
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id, text, reply_markup=main_menu())
-
 # بازگشت به منو
 @dp.callback_query_handler(lambda c: c.data == "back_main")
 async def back_main(callback_query: types.CallbackQuery):
