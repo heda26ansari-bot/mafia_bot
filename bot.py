@@ -570,30 +570,38 @@ async def process_category(callback_query: types.CallbackQuery):
 # مرحله ۳: شروع فرم سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("service_"))
 async def start_order_form(callback_query: types.CallbackQuery, state: FSMContext):
-    service_id = int(callback_query.data.split("_")[1])
+    try:
+        service_id = int(callback_query.data.split("_")[1])
+        print("🟢 Service ID دریافت شد:", service_id)  # دیباگ
 
-    async with pool.acquire() as conn:
-        service = await conn.fetchrow("SELECT title, documents FROM services WHERE id=$1", service_id)
+        async with pool.acquire() as conn:
+            service = await conn.fetchrow("SELECT title, documents FROM services WHERE id=$1", service_id)
+            print("🟢 Service از DB:", service)  # دیباگ
 
-    if not service:
-        await bot.answer_callback_query(callback_query.id, "⛔ خدمت پیدا نشد.", show_alert=True)
-        return
+        if not service:
+            await bot.answer_callback_query(callback_query.id, "⛔ خدمت پیدا نشد.", show_alert=True)
+            return
 
-    await state.update_data(service_id=service_id, documents=[])
+        await state.update_data(service_id=service_id, documents=[])
 
-    await bot.send_message(
-        callback_query.from_user.id,
-        f"📌 <b>{service['title']}</b>\n\n"
-        f"📝 مدارک لازم: {service['documents'] or '—'}\n\n"
-        "لطفاً مدارک و توضیحات رو ارسال کنید.\n"
-        "بعد روی دکمه زیر بزنید 👇",
-        reply_markup=InlineKeyboardMarkup().add(
-            InlineKeyboardButton("✅ ثبت سفارش", callback_data="submit_order")
+        await bot.send_message(
+            callback_query.from_user.id,
+            f"📌 <b>{service['title']}</b>\n\n"
+            f"📝 مدارک لازم: {service['documents'] or '—'}\n\n"
+            "لطفاً مدارک و توضیحات رو ارسال کنید.\n"
+            "بعد روی دکمه زیر بزنید 👇",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("✅ ثبت سفارش", callback_data="submit_order")
+            )
         )
-    )
 
-    await OrderForm.waiting_for_documents.set()
-    await bot.answer_callback_query(callback_query.id)
+        await OrderForm.waiting_for_documents.set()
+        await bot.answer_callback_query(callback_query.id)
+
+    except Exception as e:
+        print("❌ خطا در start_order_form:", e)
+        await bot.answer_callback_query(callback_query.id, "⚠️ خطا در پردازش خدمت.", show_alert=True)
+
 
 
 # دریافت پیام‌های کاربر (مدارک / متن / فایل)
