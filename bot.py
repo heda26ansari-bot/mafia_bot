@@ -546,49 +546,55 @@ async def process_order(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "📂 یک دسته‌بندی انتخاب کنید:", reply_markup=kb)
 
-# مرحله ۲: نمایش سرویس‌های دسته
+
+# مرحله ۲: نمایش خدمات یک دسته
 @dp.callback_query_handler(lambda c: c.data.startswith("cat_"))
 async def process_category(callback_query: types.CallbackQuery):
     cat_id = int(callback_query.data.split("_")[1])
-
     async with pool.acquire() as conn:
         services = await conn.fetch("SELECT id, title FROM services WHERE category_id=$1", cat_id)
 
-    kb = types.InlineKeyboardMarkup(row_width=1)
+    if not services:
+        await bot.answer_callback_query(callback_query.id, "⛔ خدمتی در این دسته ثبت نشده.", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(row_width=1)
     for s in services:
-        kb.add(types.InlineKeyboardButton(s["title"], callback_data=f"service_{s['id']}"))
-    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="order"))
+        kb.add(InlineKeyboardButton(s["title"], callback_data=f"service_{s['id']}"))
+    kb.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="order"))
 
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "🔎 یکی از خدمات زیر را انتخاب کنید:", reply_markup=kb)
 
 
-# شروع فرم بعد از انتخاب خدمت
+# مرحله ۳: شروع فرم سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("service_"))
 async def start_order_form(callback_query: types.CallbackQuery, state: FSMContext):
     service_id = int(callback_query.data.split("_")[1])
 
     async with pool.acquire() as conn:
-        service = await conn.fetchrow(
-            "SELECT title, documents FROM services WHERE id=$1", service_id
-        )
+        service = await conn.fetchrow("SELECT title, documents FROM services WHERE id=$1", service_id)
+
+    if not service:
+        await bot.answer_callback_query(callback_query.id, "⛔ خدمت پیدا نشد.", show_alert=True)
+        return
 
     await state.update_data(service_id=service_id, documents=[])
 
-    # ارسال توضیحات خدمت و درخواست مدارک
     await bot.send_message(
         callback_query.from_user.id,
         f"📌 <b>{service['title']}</b>\n\n"
-        f"مدارک لازم: {service['documents']}\n\n"
-        "لطفاً مدارک و توضیحات لازم را ارسال کنید.\n"
-        "می‌توانید چند پیام مختلف بفرستید.\n"
-        "وقتی آماده شدید، روی دکمه زیر بزنید 👇",
+        f"📝 مدارک لازم: {service['documents'] or '—'}\n\n"
+        "لطفاً مدارک و توضیحات رو ارسال کنید.\n"
+        "بعد روی دکمه زیر بزنید 👇",
         reply_markup=InlineKeyboardMarkup().add(
             InlineKeyboardButton("✅ ثبت سفارش", callback_data="submit_order")
         )
     )
 
     await OrderForm.waiting_for_documents.set()
+    await bot.answer_callback_query(callback_query.id)
+
 
 # دریافت پیام‌های کاربر (مدارک / متن / فایل)
 
