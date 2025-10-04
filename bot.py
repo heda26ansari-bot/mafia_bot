@@ -492,19 +492,30 @@ async def submit_order(call: types.CallbackQuery, state: FSMContext):
 
         service = await conn.fetchrow("SELECT title FROM services WHERE id=$1", service_id)
 
+    # پیام تأیید به کاربر
     await call.message.answer(
         f"✅ سفارش شما برای <b>{service['title']}</b> ثبت شد.\n"
         f"📎 کد رهگیری: <code>{order_code}</code>",
         reply_markup=main_menu()
     )
 
-    # ارسال برای ادمین
-    mention = f"<a href='tg://user?id={call.from_user.id}'>{call.from_user.full_name}</a>"
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ تکمیل سفارش", callback_data=f"complete_{order_code}"))
+    # آماده‌سازی اطلاعات مشتری برای منشن و گزارش به ادمین
+    user = call.from_user
+    full_name = (user.first_name or "") + (" " + user.last_name if user.last_name else "")
+    mention = f"<a href='tg://user?id={user.id}'>{full_name or user.username or user.id}</a>"
+    username = f"@{user.username}" if user.username else "—"
 
+    # پیام به مدیر
+    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ تکمیل سفارش", callback_data=f"complete_{order_code}"))
     await bot.send_message(
         ADMIN_ID,
-        f"📢 سفارش جدید\n👤 مشتری: {mention}\n📌 خدمت: {service['title']}\n📎 کد رهگیری: <code>{order_code}</code>\n\n📝 مدارک ارسالی در ادامه:",
+        f"📢 <b>سفارش جدید</b>\n\n"
+        f"👤 مشتری: {mention}\n"
+        f"🆔 آیدی عددی: <code>{user.id}</code>\n"
+        f"🔗 نام کاربری: {username}\n\n"
+        f"📌 خدمت: {service['title']}\n"
+        f"📎 کد رهگیری: <code>{order_code}</code>\n\n"
+        f"📝 مدارک ارسالی در ادامه 👇",
         reply_markup=kb
     )
 
