@@ -972,54 +972,65 @@ async def save_channel_post(message: types.Message):
 # ==========================
 @dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
 async def handle_channel_post(msg: types.Message):
-    # استخراج متن و هشتگ‌ها
-    text = msg.text or msg.caption or ""
-    entities = msg.entities or []
+    try:
+        text = msg.text or ""
+        print(f"📨 پست جدید از کانال دریافت شد:\n{text[:100]}...")
 
-    hashtags = [text[e.offset:e.offset+e.length] for e in entities if e.type == "hashtag"]
+        # استخراج هشتگ‌ها از متن پست
+        hashtags = [w.lstrip("#").strip() for w in text.split() if w.startswith("#")]
+        hashtags = [h for h in hashtags if h]  # حذف خالی‌ها
+        print("📍 هشتگ‌های پیدا‌شده:", hashtags)
 
-    async with pool.acquire() as conn:
-        # ثبت پست در جدول posts
-        post_id = await conn.fetchval("""
-            INSERT INTO posts (message_id, title, content)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (message_id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content
-            RETURNING id
-        """, msg.message_id, text.split("\n")[0][:100], text)
+        if not hashtags:
+            print("⛔ هیچ هشتگی در پست وجود ندارد.")
+            return
 
-        # ثبت هشتگ‌ها
-        for tag in hashtags:
-            tag_name = tag.lstrip("#")
-            hashtag_id = await conn.fetchval("""
-                INSERT INTO hashtags (name) VALUES ($1)
-                ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
-                RETURNING id
-            """, tag_name)
+        async with pool.acquire() as conn:
+            # --- پیدا کردن ID هشتگ‌ها در جدول ---
+            hashtag_ids = []
+            for tag in hashtags:
+                normalized = tag.replace("ي", "ی").replace("ك", "ک").strip()
+                row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", normalized)
+                if row:
+                    hashtag_ids.append(row["id"])
+                else:
+                    # اگر هشتگ جدید بود، اضافه کن
+                    row = await conn.fetchrow(
+                        "INSERT INTO hashtags (name) VALUES ($1) RETURNING id", normalized
+                    )
+                    hashtag_ids.append(row["id"])
 
-            # اتصال پست و هشتگ
-            await conn.execute("""
-                INSERT INTO post_hashtags (post_id, hashtag_id)
-                VALUES ($1, $2) ON CONFLICT DO NOTHING
-            """, post_id, hashtag_id)
+            print("🧩 آیدی‌های هشتگ در DB:", hashtag_ids)
 
-        # ارسال پست به مشترکین هشتگ
-        subscribers = await conn.fetch("""
-            SELECT DISTINCT user_id 
-            FROM subscriptions 
-            WHERE hashtag_id = ANY($1::int[])
-        """, [hashtag_id for tag in hashtags for hashtag_id in [
-            await conn.fetchval("SELECT id FROM hashtags WHERE name=$1", tag.lstrip("#"))
-        ] if hashtag_id])
+            # --- پیدا کردن کاربرانی که این هشتگ را دنبال می‌کنند ---
+            if not hashtag_ids:
+                print("⚠️ هیچ هشتگی در DB پیدا نشد.")
+                return
 
-        for sub in subscribers:
+            subs = await conn.fetch(
+                "SELECT DISTINCT user_id FROM subscriptions WHERE hashtag_id = ANY($1::int[])",
+                hashtag_ids
+            )
+            print(f"👥 تعداد کاربران مشترک: {len(subs)}")
+
+        if not subs:
+            print("ℹ️ هیچ کاربری مشترک این هشتگ‌ها نیست.")
+            return
+
+        # --- ارسال پست برای هر کاربر مشترک ---
+        for sub in subs:
             try:
                 await bot.send_message(
                     sub["user_id"],
-                    f"📰 <b>{text.splitlines()[0]}</b>\n\n{text[:200]}...",
+                    f"📰 پست جدید با هشتگ {'، '.join(hashtags)}:\n\n{text[:400]}",
                     disable_web_page_preview=True
                 )
+                print(f"✅ ارسال موفق برای کاربر {sub['user_id']}")
             except Exception as e:
-                print(f"⚠️ خطا در ارسال خودکار خبر به {sub['user_id']}: {e}")
+                print(f"⚠️ خطا در ارسال برای {sub['user_id']}: {e}")
+
+    except Exception as e:
+        print(f"❌ خطای کلی در پردازش پست کانال: {e}")
 
 
 
