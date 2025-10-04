@@ -88,6 +88,13 @@ async def init_db():
         )
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+            user_id BIGINT PRIMARY KEY,
+            post_limit INTEGER DEFAULT 5,
+            notifications_enabled BOOLEAN DEFAULT TRUE
+        );
+        """)
 
 
     async with pool.acquire() as conn:
@@ -169,6 +176,7 @@ def main_menu():
     kb.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
     kb.add(KeyboardButton("🔔 دریافت خودکار خبر"))
     kb.add(KeyboardButton("⚙️ مدیریت خدمات"))
+    kb.add(KeyboardButton("⚙️ تنظیمات"))
     return kb
 
 # زیرمنوی سفارشات
@@ -178,6 +186,8 @@ def orders_menu():
     kb.add(KeyboardButton("📦 سفارش‌های من"))
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
     return kb
+
+
 # ===========================
 # کیبورد دسته بندی
 # ===========================
@@ -801,43 +811,116 @@ async def show_tag_posts(callback_query: types.CallbackQuery):
 # =========================
 # 🔍 جستجو اطلاعیه/خبر
 # =========================
-@dp.message_handler(lambda m: m.text == "🔍 جستجو اطلاعیه/خبر")
-async def start_search(message: types.Message):
-    await message.answer("🔎 لطفاً کلیدواژه مورد نظر رو وارد کنید:")
+# مرحله ۱: درخواست کلیدواژه
+@dp.message_handler(lambda m: m.text == "🔍 جستجو در اطلاعیه/خبر")
+async def ask_keyword(msg: types.Message):
+    await msg.answer("🔎 لطفاً کلیدواژه مورد نظر خود را وارد کنید:")
     await SearchForm.waiting_for_keyword.set()
 
+
+# مرحله ۲: جستجو
 @dp.message_handler(state=SearchForm.waiting_for_keyword)
-async def process_search(message: types.Message, state: FSMContext):
-    keyword = message.text.strip()
+async def search_posts(msg: types.Message, state: FSMContext):
+    keyword = msg.text.strip()
+
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, title, content FROM posts WHERE title ILIKE $1 ORDER BY created_at DESC LIMIT 5",
-            f"%{keyword}%"
+        # 🔹 تعداد پست مجاز را از تنظیمات کاربر بخوان
+        post_limit = await conn.fetchval(
+            "SELECT post_limit FROM user_settings WHERE user_id=$1", msg.from_user.id
         )
+        if not post_limit:
+            post_limit = 5  # پیش‌فرض
+
+        rows = await conn.fetch("""
+            SELECT p.id, p.title, p.content, array_agg(h.name) AS hashtags
+            FROM posts p
+            LEFT JOIN post_hashtags ph ON p.id = ph.post_id
+            LEFT JOIN hashtags h ON ph.hashtag_id = h.id
+            WHERE p.title ILIKE $1
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+            LIMIT $2
+        """, f"%{keyword}%", post_limit)
 
     if not rows:
-        await message.answer("⛔ موردی یافت نشد.")
-    else:
-        for row in rows:
-            summary = (row["content"][:100] + "...") if row["content"] else "—"
-            keyboard = InlineKeyboardMarkup().add(
-                InlineKeyboardButton("📖 نمایش کامل خبر", callback_data=f"post_{row['id']}")
-            )
-            hashtags = await conn.fetch("""
-                SELECT h.name FROM post_hashtags ph
-                JOIN hashtags h ON ph.hashtag_id=h.id
-                WHERE ph.post_id=$1
-            """, row["id"])
-            for h in hashtags:
-                keyboard.add(InlineKeyboardButton(f"#{h['name']}", callback_data=f"tag_{h['name']}"))
+        await msg.answer("⛔ هیچ خبری با این کلیدواژه یافت نشد.")
+        await state.finish()
+        return
 
-            await message.answer(
-                f"📰 <b>{row['title']}</b>\n\n"
-                f"{summary}",
-                reply_markup=keyboard
-            )
+    for row in rows:
+        summary = (row["content"][:120] + "...") if row["content"] else "⛔ بدون توضیحات"
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🔽 نمایش کامل خبر", callback_data=f"full_{row['id']}"))
+
+        # دکمه هشتگ‌ها
+        if row["hashtags"]:
+            for h in row["hashtags"]:
+                if h:  # حذف None
+                    kb.add(InlineKeyboardButton(f"#{h}", callback_data=f"tag_{h}"))
+
+        await msg.answer(
+            f"📌 <b>{row['title']}</b>\n\n"
+            f"📝 {summary}",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
 
     await state.finish()
+
+
+# مرحله ۳: نمایش کامل خبر
+@dp.callback_query_handler(lambda c: c.data.startswith("full_"))
+async def show_full(callback_query: types.CallbackQuery):
+    post_id = int(callback_query.data.split("_")[1])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT title, content FROM posts WHERE id=$1", post_id)
+
+    if row:
+        await bot.send_message(
+            callback_query.from_user.id,
+            f"📌 <b>{row['title']}</b>\n\n{row['content']}",
+            parse_mode="HTML"
+        )
+
+    await bot.answer_callback_query(callback_query.id)
+
+
+# مرحله ۴: نمایش پست‌های مرتبط با هشتگ
+@dp.callback_query_handler(lambda c: c.data.startswith("tag_"))
+async def show_tag_posts(callback_query: types.CallbackQuery):
+    tag = callback_query.data.split("_", 1)[1]
+
+    async with pool.acquire() as conn:
+        # 🔹 تعداد پست مجاز را از تنظیمات کاربر بخوان
+        post_limit = await conn.fetchval(
+            "SELECT post_limit FROM user_settings WHERE user_id=$1", callback_query.from_user.id
+        )
+        if not post_limit:
+            post_limit = 5  # پیش‌فرض
+
+        rows = await conn.fetch("""
+            SELECT p.title, p.content
+            FROM posts p
+            JOIN post_hashtags ph ON p.id = ph.post_id
+            JOIN hashtags h ON ph.hashtag_id = h.id
+            WHERE h.name=$1
+            ORDER BY p.created_at DESC
+            LIMIT $2
+        """, tag, post_limit)
+
+    if not rows:
+        await bot.send_message(callback_query.from_user.id, "⛔ خبری برای این هشتگ یافت نشد.")
+    else:
+        for row in rows:
+            summary = (row["content"][:120] + "...") if row["content"] else "⛔ بدون توضیحات"
+            await bot.send_message(
+                callback_query.from_user.id,
+                f"📌 <b>{row['title']}</b>\n\n📝 {summary}",
+                parse_mode="HTML"
+            )
+
+    await bot.answer_callback_query(callback_query.id)
+
 
 # ======================
 # 🔔 دریافت خودکار خبر
@@ -1035,8 +1118,121 @@ async def handle_channel_post(msg: types.Message):
     except Exception as e:
         print(f"❌ خطای کلی در پردازش پست کانال: {e}")
 
+# ===============================
+# تنظیمات
+# ===============================
+
+@dp.message_handler(lambda m: m.text == "⚙️ تنظیمات")
+async def settings_menu(message: types.Message):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("📊 تنظیم تعداد پست در جستجو", callback_data="set_post_limit"),
+        InlineKeyboardButton("🚫 غیرفعال کردن موقت اعلان‌ها", callback_data="disable_notifications"),
+        InlineKeyboardButton("✅ فعال کردن اعلان‌ها", callback_data="enable_notifications"),
+        InlineKeyboardButton("🔎 پیگیری سفارش", callback_data="track_order"),
+        InlineKeyboardButton("⬅️ بازگشت", callback_data="back_main")
+    )
+    await message.answer("⚙️ تنظیمات ربات:", reply_markup=kb)
+
+# ===============================
+# محدودیت پست
+# ===============================
+@dp.callback_query_handler(lambda c: c.data == "set_post_limit")
+async def ask_post_limit(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, "📊 لطفاً تعداد پست‌های قابل نمایش در جستجو را وارد کنید (مثلاً 5 یا 10):")
+    await UserStates.waiting_for_post_limit.set()
 
 
+@dp.message_handler(state=UserStates.waiting_for_post_limit)
+async def save_post_limit(message: types.Message, state: FSMContext):
+    try:
+        limit = int(message.text)
+        if limit < 1 or limit > 50:
+            await message.reply("⚠️ عدد باید بین ۱ تا ۵۰ باشد.")
+            return
+
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_settings (user_id, post_limit)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET post_limit = $2
+            """, message.from_user.id, limit)
+
+        await message.reply(f"✅ تعداد پست‌ها روی {limit} تنظیم شد.", reply_markup=main_menu())
+        await state.finish()
+
+    except ValueError:
+        await message.reply("❌ لطفاً فقط عدد وارد کنید.")
+
+# ===============================
+# غیرفعال سازی اشتراک
+# ===============================
+@dp.callback_query_handler(lambda c: c.data == "disable_notifications")
+async def disable_notifications(callback_query: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_settings (user_id, notifications_enabled)
+            VALUES ($1, FALSE)
+            ON CONFLICT (user_id) DO UPDATE SET notifications_enabled = FALSE
+        """, callback_query.from_user.id)
+
+    await bot.answer_callback_query(callback_query.id, "🚫 اعلان‌ها غیرفعال شد.")
+    await bot.send_message(callback_query.from_user.id, "اعلان‌های خودکار موقتاً غیرفعال شدند ✅")
+
+# ===============================
+# فعالسازی اشتراک
+# ===============================
+@dp.callback_query_handler(lambda c: c.data == "enable_notifications")
+async def enable_notifications(callback_query: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_settings (user_id, notifications_enabled)
+            VALUES ($1, TRUE)
+            ON CONFLICT (user_id) DO UPDATE SET notifications_enabled = TRUE
+        """, callback_query.from_user.id)
+
+    await bot.answer_callback_query(callback_query.id, "✅ اعلان‌ها فعال شدند.")
+    await bot.send_message(callback_query.from_user.id, "اعلان‌های خودکار دوباره فعال شدند 🔔")
+
+# ===============================
+# رهگیری سفارش
+# ===============================
+@dp.callback_query_handler(lambda c: c.data == "track_order")
+async def ask_tracking_code(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, "🔎 لطفاً کد رهگیری سفارش را وارد کنید:")
+    await UserStates.waiting_for_tracking_code.set()
+
+
+@dp.message_handler(state=UserStates.waiting_for_tracking_code)
+async def show_order_status(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+
+    async with pool.acquire() as conn:
+        order = await conn.fetchrow("""
+            SELECT o.order_code, o.status, o.docs, o.created_at, s.title
+            FROM orders o
+            JOIN services s ON o.service_id = s.id
+            WHERE o.order_code=$1 AND o.user_id=$2
+        """, code, message.from_user.id)
+
+    if not order:
+        await message.reply("❌ سفارشی با این کد پیدا نشد.", reply_markup=main_menu())
+    else:
+        docs = order["docs"] or "—"
+        created = order["created_at"].strftime("%Y/%m/%d %H:%M")
+        text = (
+            f"📦 <b>وضعیت سفارش</b>\n\n"
+            f"🔖 کد: <code>{order['order_code']}</code>\n"
+            f"🧩 خدمت: {order['title']}\n"
+            f"📅 تاریخ ثبت: {created}\n"
+            f"📊 وضعیت: <b>{order['status']}</b>\n"
+            f"📝 مدارک:\n{docs}"
+        )
+        await message.reply(text, parse_mode="HTML", reply_markup=main_menu())
+
+    await state.finish()
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
