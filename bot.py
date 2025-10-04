@@ -972,22 +972,35 @@ async def save_channel_post(message: types.Message):
 # ==========================
 @dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
 async def handle_channel_post(msg: types.Message):
+    # استخراج متن و هشتگ‌ها
+    text = msg.text or msg.caption or ""
+    entities = msg.entities or []
+
+    hashtags = [text[e.offset:e.offset+e.length] for e in entities if e.type == "hashtag"]
+
     async with pool.acquire() as conn:
-        # ذخیره پست
+        # ثبت پست در جدول posts
         post_id = await conn.fetchval("""
             INSERT INTO posts (message_id, title, content)
             VALUES ($1, $2, $3)
-            ON CONFLICT (message_id) DO UPDATE SET title=$2, content=$3
+            ON CONFLICT (message_id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content
             RETURNING id
-        """, msg.message_id, msg.text.split("\n")[0], msg.text)
+        """, msg.message_id, text.split("\n")[0][:100], text)
 
-        # استخراج هشتگ‌ها
-        if msg.entities:
-            for ent in msg.entities:
-                if ent.type == "hashtag":
-                    tag = msg.text[ent.offset:ent.offset+ent.length].lstrip("#")
-                    ht = await conn.fetchrow("INSERT INTO hashtags(name) VALUES($1) ON CONFLICT(name) DO UPDATE SET name=$1 RETURNING id", tag)
-                    await conn.execute("INSERT INTO post_hashtags(post_id, hashtag_id) VALUES($1,$2) ON CONFLICT DO NOTHING", post_id, ht["id"])
+        # ثبت هشتگ‌ها
+        for tag in hashtags:
+            tag_name = tag.lstrip("#")
+            hashtag_id = await conn.fetchval("""
+                INSERT INTO hashtags (name) VALUES ($1)
+                ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
+                RETURNING id
+            """, tag_name)
+
+            # اتصال پست و هشتگ
+            await conn.execute("""
+                INSERT INTO post_hashtags (post_id, hashtag_id)
+                VALUES ($1, $2) ON CONFLICT DO NOTHING
+            """, post_id, hashtag_id)
 
 
 # ---------------- راه‌اندازی ----------------
