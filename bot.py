@@ -393,7 +393,7 @@ async def show_orders_menu(message: types.Message):
 @dp.message_handler(lambda m: m.text == "➕ ثبت سفارش")
 async def add_order(message: types.Message):
     kb = await service_categories_keyboard()
-    await message.answer("📋 لطفاً یک دسته‌بندی برای سفارش انتخاب کنید:", reply_markup=await service_categories_keyboard())
+    await message.answer("📋 لطفاً یک دسته‌بندی برای سفارش انتخاب کنید:", reply_markup=kb)
 
 
 @dp.message_handler(lambda m: m.text == "📦 سفارش‌های من")
