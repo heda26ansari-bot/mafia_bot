@@ -967,63 +967,66 @@ async def save_channel_post(message: types.Message):
             """, post_id, tag_row["id"])
 
 
-# ==========================
-#  دریافت پست ها و هشتگ ها از کانال
-# ==========================
+# ===============================
+# 📢 هندلر پست‌های جدید کانال (با ارسال خودکار به مشترکین)
+# ===============================
 @dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
 async def handle_channel_post(msg: types.Message):
     try:
         text = msg.text or ""
         print(f"📨 پست جدید از کانال دریافت شد:\n{text[:100]}...")
 
-        # استخراج هشتگ‌ها از متن پست
+        # استخراج هشتگ‌ها
         hashtags = [w.lstrip("#").strip() for w in text.split() if w.startswith("#")]
-        hashtags = [h for h in hashtags if h]  # حذف خالی‌ها
+        hashtags = [h for h in hashtags if h]
         print("📍 هشتگ‌های پیدا‌شده:", hashtags)
 
         if not hashtags:
-            print("⛔ هیچ هشتگی در پست وجود ندارد.")
+            print("⛔ پستی بدون هشتگ دریافت شد.")
             return
 
+        # استخراج شناسه و لینک پست
+        channel_username = msg.chat.username
+        message_link = f"https://t.me/{channel_username}/{msg.message_id}" if channel_username else None
+
         async with pool.acquire() as conn:
-            # --- پیدا کردن ID هشتگ‌ها در جدول ---
             hashtag_ids = []
             for tag in hashtags:
                 normalized = tag.replace("ي", "ی").replace("ك", "ک").strip()
                 row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", normalized)
-                if row:
-                    hashtag_ids.append(row["id"])
-                else:
-                    # اگر هشتگ جدید بود، اضافه کن
+                if not row:
                     row = await conn.fetchrow(
                         "INSERT INTO hashtags (name) VALUES ($1) RETURNING id", normalized
                     )
-                    hashtag_ids.append(row["id"])
+                hashtag_ids.append(row["id"])
 
-            print("🧩 آیدی‌های هشتگ در DB:", hashtag_ids)
+            print("🧩 آیدی‌های هشتگ:", hashtag_ids)
 
-            # --- پیدا کردن کاربرانی که این هشتگ را دنبال می‌کنند ---
-            if not hashtag_ids:
-                print("⚠️ هیچ هشتگی در DB پیدا نشد.")
-                return
-
+            # پیدا کردن کاربران مشترک در subscriptions
             subs = await conn.fetch(
                 "SELECT DISTINCT user_id FROM subscriptions WHERE hashtag_id = ANY($1::int[])",
                 hashtag_ids
             )
-            print(f"👥 تعداد کاربران مشترک: {len(subs)}")
 
         if not subs:
             print("ℹ️ هیچ کاربری مشترک این هشتگ‌ها نیست.")
             return
 
-        # --- ارسال پست برای هر کاربر مشترک ---
+        # آماده‌سازی پیام نهایی برای کاربر
+        hashtags_str = "، ".join([f"#{h}" for h in hashtags])
+        caption = f"📰 پست جدید با هشتگ‌های زیر:\n{hashtags_str}\n\n{text[:400]}"
+
+        if message_link:
+            caption += f"\n\n🔗 <a href='{message_link}'>مشاهده پست در کانال</a>"
+
+        # ارسال به کاربران مشترک
         for sub in subs:
             try:
                 await bot.send_message(
                     sub["user_id"],
-                    f"📰 پست جدید با هشتگ {'، '.join(hashtags)}:\n\n{text[:400]}",
-                    disable_web_page_preview=True
+                    caption,
+                    disable_web_page_preview=True,
+                    parse_mode="HTML"
                 )
                 print(f"✅ ارسال موفق برای کاربر {sub['user_id']}")
             except Exception as e:
@@ -1031,6 +1034,7 @@ async def handle_channel_post(msg: types.Message):
 
     except Exception as e:
         print(f"❌ خطای کلی در پردازش پست کانال: {e}")
+
 
 
 
