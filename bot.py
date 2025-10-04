@@ -1002,6 +1002,26 @@ async def handle_channel_post(msg: types.Message):
                 VALUES ($1, $2) ON CONFLICT DO NOTHING
             """, post_id, hashtag_id)
 
+        # ارسال پست به مشترکین هشتگ
+        subscribers = await conn.fetch("""
+            SELECT DISTINCT user_id 
+            FROM subscriptions 
+            WHERE hashtag_id = ANY($1::int[])
+        """, [hashtag_id for tag in hashtags for hashtag_id in [
+            await conn.fetchval("SELECT id FROM hashtags WHERE name=$1", tag.lstrip("#"))
+        ] if hashtag_id])
+
+        for sub in subscribers:
+            try:
+                await bot.send_message(
+                    sub["user_id"],
+                    f"📰 <b>{text.splitlines()[0]}</b>\n\n{text[:200]}...",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                print(f"⚠️ خطا در ارسال خودکار خبر به {sub['user_id']}: {e}")
+
+
 
 # ---------------- راه‌اندازی ----------------
 async def on_startup(dispatcher):
