@@ -15,13 +15,14 @@ class OrderForm(StatesGroup):
 
 class SearchForm(StatesGroup):
     waiting_for_keyword = State()
-
+    
 class AdminAddService(StatesGroup):
     waiting_for_title = State()
     waiting_for_docs = State()
 
 class UserStates(StatesGroup):
     waiting_for_post_limit = State()
+    waiting_for_tracking_code = State()
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
