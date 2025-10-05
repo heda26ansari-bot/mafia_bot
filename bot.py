@@ -20,6 +20,9 @@ class AdminAddService(StatesGroup):
     waiting_for_title = State()
     waiting_for_docs = State()
 
+class UserStates(StatesGroup):
+    waiting_for_post_limit = State()
+
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
