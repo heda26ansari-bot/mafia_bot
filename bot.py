@@ -203,58 +203,6 @@ async def init_db():
 
     print("✅ دیتابیس آماده شد.")
 
-async def insert_cities_from_csv():
-    db_url = os.getenv("DATABASE_URL")  # مقدار از محیط Railway گرفته می‌شود
-    if not db_url:
-        raise ValueError("❌ متغیر DATABASE_URL در محیط تنظیم نشده است.")
-
-    conn = await asyncpg.connect(db_url)
-
-    # ایجاد جدول‌های استان‌ها و شهرها (در صورت عدم وجود)
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS provinces (
-        id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE
-    );
-    CREATE TABLE IF NOT EXISTS cities (
-        id SERIAL PRIMARY KEY,
-        province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
-        name TEXT
-    );
-    """)
-
-    csv_path = os.path.join(os.path.dirname(__file__), "Iran-Cities.csv")  # مسیر فایل آپلود شده
-    added_provinces = 0
-    added_cities = 0
-
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            province = row["state"].strip()
-            city = row["city"].strip()
-
-            # ثبت استان (در صورت جدید بودن)
-            province_id = await conn.fetchval(
-                "INSERT INTO provinces (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id;",
-                province
-            )
-
-            # بررسی تکراری نبودن شهر در همان استان
-            exists = await conn.fetchval(
-                "SELECT 1 FROM cities WHERE name=$1 AND province_id=$2;", city, province_id
-            )
-            if not exists:
-                await conn.execute(
-                    "INSERT INTO cities (province_id, name) VALUES ($1, $2);",
-                    province_id, city
-                )
-                added_cities += 1
-
-        print(f"✅ داده‌ها با موفقیت ذخیره شدند! ({added_cities} شهر جدید اضافه شد)")
-
-    await conn.close()
-
-asyncio.run(insert_cities_from_csv())
 
 # ---------------- کیبورد ----------------
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
