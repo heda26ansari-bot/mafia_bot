@@ -1246,13 +1246,52 @@ async def show_help(message: types.Message):
         "ℹ️ در صورت بروز هرگونه مشکل می‌توانید با پشتیبانی تماس بگیرید."
     )
     
-    # دکمه تماس با پشتیبانی
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("📞 تماس با پشتیبانی", url="https://t.me/mshmahdi")
-    )
-    
-    await message.answer(help_text, parse_mode="HTML")
+    # تلاش برای ساخت URL مطمئن برای ادمین:
+    admin_username = os.getenv("ADMIN_USERNAME")  # optional
+    admin_url = None
+
+    if admin_username:
+        admin_url = f"https://t.me/{admin_username.lstrip('@')}"
+    else:
+        # اگر username در ENV نبود، تلاش می‌کنیم از get_chat استفاده کنیم
+        try:
+            admin_chat = await bot.get_chat(ADMIN_ID)
+            if getattr(admin_chat, "username", None):
+                admin_url = f"https://t.me/{admin_chat.username}"
+            else:
+                # اگر username نداشت از لینک tg:// استفاده کن (موبایل ها آن را باز می‌کنند)
+                admin_url = f"tg://user?id={ADMIN_ID}"
+        except Exception:
+            # اگر get_chat هم خطا داد، از tg:// به عنوان آخرین راه استفاده می‌کنیم
+            admin_url = f"tg://user?id={ADMIN_ID}"
+
+    # کیبورد: دکمه URL + دکمه fallback که اطلاعات تماس را می‌فرستد
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📞 تماس با پشتیبانی", url=admin_url))
+    kb.add(InlineKeyboardButton("✉️ روش‌های تماس (نمایش در چت)", callback_data="contact_support"))
+
+    # متن را هم با لینک اضافه می‌کنیم تا در صورت عدم نمایش دکمه، کاربر لینک را ببیند
+    help_text_with_link = help_text + f"\n\n🔗 لینک تماس: {admin_url}"
+
+    await message.answer(help_text_with_link, parse_mode="HTML", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "contact_support")
+async def contact_support_callback(call: types.CallbackQuery):
+    await call.answer()  # برداشتن لودینگ
+    try:
+        admin_chat = await bot.get_chat(ADMIN_ID)
+    except Exception:
+        admin_chat = None
+
+    lines = ["📬 <b>روش‌های تماس با پشتیبانی</b>\n"]
+    if admin_chat and getattr(admin_chat, "username", None):
+        lines.append(f"• لینک مستقیم: https://t.me/{admin_chat.username}")
+    # همیشه آیدی را هم نشان می‌دهیم (کاربر می‌تواند آن را ذخیره یا کپی کند)
+    lines.append(f"• شناسه پشتیبانی: <code>{ADMIN_ID}</code>")
+    lines.append("\nلطفاً روی لینک کلیک کنید یا شناسه را جهت شروع گفتگو استفاده کنید.")
+
+    await call.message.answer("\n".join(lines), parse_mode="HTML")
 
 
 # ---------------- راه‌اندازی ----------------
