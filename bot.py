@@ -127,6 +127,7 @@ async def init_db():
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
         """)
+        
         # اطمینان از وجود ستون service_id
         await conn.execute("""
         ALTER TABLE orders
@@ -168,6 +169,36 @@ async def init_db():
             PRIMARY KEY (post_id, hashtag_id)
         )
         """)
+        # جدول استان‌ها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS provinces (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE
+        );
+        """)
+
+        # جدول شهرها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cities (
+            id SERIAL PRIMARY KEY,
+            province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
+            name TEXT
+        );
+        """)
+
+        # جدول کافی‌نت‌ها
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cafenets (
+            id SERIAL PRIMARY KEY,
+            province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
+            city_id INTEGER REFERENCES cities(id) ON DELETE CASCADE,
+            name TEXT,
+            address TEXT,
+            phone TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        );
+        """)
+
 
 
     print("✅ دیتابیس آماده شد.")
@@ -192,7 +223,7 @@ async def insert_cities_from_csv():
     );
     """)
 
-    csv_path = "/mnt/data/Iran-Cities.csv"  # مسیر فایل آپلود شده
+    csv_path = os.path.join(os.path.dirname(__file__), "Iran-Cities.csv")  # مسیر فایل آپلود شده
     added_provinces = 0
     added_cities = 0
 
@@ -234,6 +265,7 @@ def main_menu():
     kb.add(KeyboardButton("📋 سفارش خدمات"))
     kb.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
     kb.add(KeyboardButton("🔔 دریافت خودکار خبر"))
+    kb.add(KeyboardButton("🧭 مراجعه حضوری"))
     kb.add(KeyboardButton("⚙️ مدیریت خدمات"))
     kb.add(KeyboardButton("⚙️ تنظیمات"))
     kb.add(KeyboardButton("📘 راهنما"))
@@ -452,8 +484,120 @@ async def admin_cancel_del(call: types.CallbackQuery):
 @dp.message_handler(lambda m: m.text == "⬅️ بازگشت به منوی اصلی")
 async def back_to_main(message: types.Message):
     await message.answer("🔙 بازگشت به منوی اصلی", reply_markup=main_menu())
+    
+# =========================
+# 🧭 مراجعه حضوری
+# =========================
+@dp.message_handler(lambda m: m.text == "🧭 مراجعه حضوری")
+async def visit_in_person(message: types.Message):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📍 جستجوی کافی‌نت نزدیک شما", callback_data="search_cafenet"))
+    kb.add(InlineKeyboardButton("➕ ثبت کافی‌نت شما", callback_data="register_cafenet"))
+    await message.answer("لطفاً یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "search_cafenet")
+async def choose_province_for_search(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+    kb = InlineKeyboardMarkup(row_width=2)
+    for p in provinces:
+        kb.add(InlineKeyboardButton(p["name"], callback_data=f"search_province_{p['id']}"))
+    await call.message.edit_text("🌍 استان خود را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("search_province_"))
+async def choose_city_for_search(call: types.CallbackQuery):
+    province_id = int(call.data.split("_")[2])
+    async with pool.acquire() as conn:
+        cities = await conn.fetch("SELECT id, name FROM cities WHERE province_id=$1 ORDER BY name", province_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+    for cty in cities:
+        kb.add(InlineKeyboardButton(cty["name"], callback_data=f"search_city_{cty['id']}"))
+    await call.message.edit_text("🏙 شهر خود را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("search_city_"))
+async def show_cafenets_in_city(call: types.CallbackQuery):
+    city_id = int(call.data.split("_")[2])
+    async with pool.acquire() as conn:
+        cafenets = await conn.fetch("""
+            SELECT name, address, phone FROM cafenets WHERE city_id=$1 ORDER BY name
+        """, city_id)
+
+    if not cafenets:
+        await call.message.edit_text("⛔ هیچ کافی‌نتی برای این شهر ثبت نشده است.")
+        return
+
+    text = "📍 <b>کافی‌نت‌های ثبت‌شده در این شهر:</b>\n\n"
+    for c in cafenets:
+        text += f"🏠 <b>{c['name']}</b>\n📞 {c['phone']}\n📍 {c['address']}\n\n"
+
+    await call.message.edit_text(text, parse_mode="HTML")
+
+from aiogram.dispatcher.filters.state import State, StatesGroup
+
+class RegisterCafeNet(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_address = State()
+    waiting_for_phone = State()
+
+@dp.callback_query_handler(lambda c: c.data == "register_cafenet")
+async def choose_province_for_register(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+    kb = InlineKeyboardMarkup(row_width=2)
+    for p in provinces:
+        kb.add(InlineKeyboardButton(p["name"], callback_data=f"reg_province_{p['id']}"))
+    await call.message.edit_text("📍 لطفاً استان خود را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("reg_province_"))
+async def choose_city_for_register(call: types.CallbackQuery):
+    province_id = int(call.data.split("_")[2])
+    async with pool.acquire() as conn:
+        cities = await conn.fetch("SELECT id, name FROM cities WHERE province_id=$1 ORDER BY name", province_id)
+    kb = InlineKeyboardMarkup(row_width=2)
+    for cty in cities:
+        kb.add(InlineKeyboardButton(cty["name"], callback_data=f"reg_city_{province_id}_{cty['id']}"))
+    await call.message.edit_text("🏙 شهر خود را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("reg_city_"))
+async def ask_cafenet_name(call: types.CallbackQuery, state: FSMContext):
+    _, _, province_id, city_id = call.data.split("_")
+    await state.update_data(province_id=int(province_id), city_id=int(city_id))
+    await RegisterCafeNet.waiting_for_name.set()
+    await call.message.answer("✍️ لطفاً نام کافی‌نت خود را وارد کنید:")
+
+@dp.message_handler(state=RegisterCafeNet.waiting_for_name)
+async def get_cafenet_name(msg: types.Message, state: FSMContext):
+    await state.update_data(name=msg.text)
+    await RegisterCafeNet.waiting_for_address.set()
+    await msg.answer("📍 لطفاً آدرس کامل کافی‌نت را ارسال کنید:")
+
+@dp.message_handler(state=RegisterCafeNet.waiting_for_address)
+async def get_cafenet_address(msg: types.Message, state: FSMContext):
+    await state.update_data(address=msg.text)
+    await RegisterCafeNet.waiting_for_phone.set()
+    await msg.answer("📞 لطفاً شماره تماس کافی‌نت را ارسال کنید:")
+
+@dp.message_handler(state=RegisterCafeNet.waiting_for_phone)
+async def finalize_cafenet_registration(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    province_id = data["province_id"]
+    city_id = data["city_id"]
+    name = data["name"]
+    address = data["address"]
+    phone = msg.text
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO cafenets (province_id, city_id, name, address, phone)
+            VALUES ($1, $2, $3, $4, $5)
+        """, province_id, city_id, name, address, phone)
+
+    await msg.answer("✅ کافی‌نت شما با موفقیت ثبت شد.", reply_markup=main_menu())
+    await state.finish()
 
 
+
+#===============================
 # رفتن به زیرمنوی سفارشات
 @dp.message_handler(lambda m: m.text == "📋 سفارش خدمات")
 async def show_orders_menu(message: types.Message):
