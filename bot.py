@@ -816,7 +816,7 @@ async def show_tag_posts(callback_query: types.CallbackQuery):
 # 🔍 جستجو اطلاعیه/خبر
 # =========================
 # مرحله ۱: درخواست کلیدواژه
-@dp.message_handler(lambda m: m.text == "🔍 جستجو در اطلاعیه/خبر")
+@dp.message_handler(lambda m: m.text == "🔍 جستجو اطلاعیه/خبر")
 async def ask_keyword(msg: types.Message):
     await msg.answer("🔎 لطفاً کلیدواژه مورد نظر خود را وارد کنید:")
     await SearchForm.waiting_for_keyword.set()
@@ -1020,107 +1020,80 @@ async def cmd_add_service_menu(msg: types.Message):
 # ======================
 # ذخیره پست‌های جدید کانال
 # ======================
-@dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
-async def save_channel_post(message: types.Message):
-    text = message.text or message.caption or ""
-    title = text.split("\n")[0][:100] if text else "بدون عنوان"
+@dp.channel_post_handler(content_types=types.ContentTypes.ANY)
+async def process_channel_post(message: types.Message):
+    """
+    هندلر واحد برای ذخیره پست‌های کانال و ارسال خودکار به کاربران سابسکرایب‌شده.
+    """
+    # --- ۱. استخراج اطلاعات پست ---
+    title = (message.caption or message.text or "").split("\n")[0][:150]
+    content = message.caption or message.text or ""
+    hashtags = [tag.lstrip("#") for tag in content.split() if tag.startswith("#")]
 
+    if not title:
+        title = "پست بدون عنوان"
+
+    # --- ۲. ذخیره پست در دیتابیس ---
     async with pool.acquire() as conn:
-        # ذخیره پست
-        post = await conn.fetchrow("""
-            INSERT INTO posts (message_id, title, content)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (message_id) DO NOTHING
+        # ذخیره در جدول posts
+        post_row = await conn.fetchrow("""
+            INSERT INTO posts (message_id, title, content, created_at)
+            VALUES ($1, $2, $3, NOW())
             RETURNING id
-        """, message.message_id, title, text)
+        """, message.message_id, title, content)
+        post_id = post_row["id"]
 
-        if not post:
-            return
-
-        post_id = post["id"]
-
-        # استخراج هشتگ‌ها و ذخیره
-        hashtags = [word.strip("#") for word in text.split() if word.startswith("#")]
+        # ذخیره هشتگ‌ها و اتصال آنها به پست
         for tag in hashtags:
-            tag_row = await conn.fetchrow("""
-                INSERT INTO hashtags (name) VALUES ($1)
-                ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
-                RETURNING id
-            """, tag)
-            await conn.execute("""
-                INSERT INTO post_hashtags (post_id, hashtag_id)
-                VALUES ($1, $2)
-                ON CONFLICT DO NOTHING
-            """, post_id, tag_row["id"])
+            hashtag_row = await conn.fetchrow(
+                "INSERT INTO hashtags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+                tag
+            )
+            hashtag_id = hashtag_row["id"]
+            await conn.execute(
+                "INSERT INTO post_hashtags (post_id, hashtag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                post_id, hashtag_id
+            )
+
+    # --- ۳. ارسال خودکار به کاربران مشترک ---
+    async with pool.acquire() as conn:
+        for tag in hashtags:
+            # گرفتن آیدی هشتگ از جدول hashtags
+            hashtag_row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", tag)
+            if not hashtag_row:
+                continue
+            hashtag_id = hashtag_row["id"]
+
+            # دریافت کاربران مشترک برای این هشتگ که اعلان فعال دارند
+            users = await conn.fetch("""
+                SELECT s.user_id FROM subscriptions s
+                JOIN user_settings us ON us.user_id = s.user_id
+                WHERE s.hashtag_id=$1 AND us.notifications_enabled=TRUE
+            """, hashtag_id)
+
+            # ارسال پست به هر کاربر
+            for u in users:
+                try:
+                    summary = (content[:200] + "...") if len(content) > 200 else content
+                    kb = InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("🔽 نمایش کامل", callback_data=f"full_{post_id}")
+                    )
+                    await bot.send_message(
+                        u["user_id"],
+                        f"📢 <b>{title}</b>\n\n{summary}",
+                        parse_mode="HTML",
+                        reply_markup=kb
+                    )
+                except Exception as e:
+                    print(f"⚠️ خطا در ارسال خودکار برای کاربر {u['user_id']}: {e}")
+
+    print(f"✅ پست {post_id} ذخیره و به کاربران مرتبط ارسال شد.")
+
 
 
 # ===============================
 # 📢 هندلر پست‌های جدید کانال (با ارسال خودکار به مشترکین)
 # ===============================
-@dp.channel_post_handler(content_types=types.ContentTypes.TEXT)
-async def handle_channel_post(msg: types.Message):
-    try:
-        text = msg.text or ""
-        print(f"📨 پست جدید از کانال دریافت شد:\n{text[:100]}...")
-
-        # استخراج هشتگ‌ها
-        hashtags = [w.lstrip("#").strip() for w in text.split() if w.startswith("#")]
-        hashtags = [h for h in hashtags if h]
-        print("📍 هشتگ‌های پیدا‌شده:", hashtags)
-
-        if not hashtags:
-            print("⛔ پستی بدون هشتگ دریافت شد.")
-            return
-
-        # استخراج شناسه و لینک پست
-        channel_username = msg.chat.username
-        message_link = f"https://t.me/{channel_username}/{msg.message_id}" if channel_username else None
-
-        async with pool.acquire() as conn:
-            hashtag_ids = []
-            for tag in hashtags:
-                normalized = tag.replace("ي", "ی").replace("ك", "ک").strip()
-                row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", normalized)
-                if not row:
-                    row = await conn.fetchrow(
-                        "INSERT INTO hashtags (name) VALUES ($1) RETURNING id", normalized
-                    )
-                hashtag_ids.append(row["id"])
-
-            print("🧩 آیدی‌های هشتگ:", hashtag_ids)
-
-            # پیدا کردن کاربران مشترک در subscriptions
-            subs = await conn.fetch(
-                "SELECT DISTINCT user_id FROM subscriptions WHERE hashtag_id = ANY($1::int[])",
-                hashtag_ids
-            )
-
-        if not subs:
-            print("ℹ️ هیچ کاربری مشترک این هشتگ‌ها نیست.")
-            return
-
-        # آماده‌سازی پیام نهایی برای کاربر
-        hashtags_str = "، ".join([f"#{h}" for h in hashtags])
-        caption = f"📰 پست جدید با هشتگ‌های زیر:\n{hashtags_str}\n\n{text[:400]}"
-
-        if message_link:
-            caption += f"\n\n🔗 <a href='{message_link}'>مشاهده پست در کانال</a>"
-
-        # ارسال به کاربران مشترک
-        for sub in subs:
-            try:
-                await bot.send_message(
-                    sub["user_id"],
-                    caption,
-                    disable_web_page_preview=True,
-                    parse_mode="HTML"
-                )
-                print(f"✅ ارسال موفق برای کاربر {sub['user_id']}")
-            except Exception as e:
-                print(f"⚠️ خطا در ارسال برای {sub['user_id']}: {e}")
-
-    except Exception as e:
-        print(f"❌ خطای کلی در پردازش پست کانال: {e}")
 
 # ===============================
 # تنظیمات
