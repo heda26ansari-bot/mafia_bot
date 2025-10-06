@@ -43,165 +43,135 @@ pool = None  # اتصال دیتابیس
 # ---------------- دیتابیس ----------------
 async def init_db():
     global pool
-    pool = await asyncpg.create_pool(DATABASE_URL)
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL)
+    except Exception as e:
+        print(f"❌ خطا در ایجاد pool دیتابیس: {e}")
+        raise
 
-    async with pool.acquire() as conn:
-        # جدول کاربران
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT UNIQUE,
-            first_name TEXT,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT now()
-        );
-        """)
+    try:
+        async with pool.acquire() as conn:
+            # جدول کاربران
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT UNIQUE,
+                first_name TEXT,
+                username TEXT,
+                created_at TIMESTAMP DEFAULT now()
+            );
+            """)
 
-        # دسته‌بندی خدمات
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS service_categories (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE
-        );
-        """)
+            # دسته‌بندی خدمات
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS service_categories (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE
+            );
+            """)
 
-        # خدمات
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS services (
-            id SERIAL PRIMARY KEY,
-            category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
-            title TEXT
-        );
-        """)
+            # خدمات (اطمینان از ستون documents)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS services (
+                id SERIAL PRIMARY KEY,
+                category_id INTEGER REFERENCES service_categories(id) ON DELETE CASCADE,
+                title TEXT
+            );
+            """)
+            await conn.execute("""
+            ALTER TABLE services
+            ADD COLUMN IF NOT EXISTS documents TEXT
+            """)
 
-        # سفارش‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-            service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-            created_at TIMESTAMP DEFAULT now()
-        );
-        """)
+            # orders (یکبار و کامل)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+                order_code TEXT UNIQUE,
+                docs TEXT,
+                status TEXT DEFAULT 'new',
+                created_at TIMESTAMP DEFAULT now()
+            );
+            """)
 
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-            service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
-            docs TEXT,
-            created_at TIMESTAMP DEFAULT now()
-        )
-        """)
+            # تنظیمات کاربر
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_settings (
+                user_id BIGINT PRIMARY KEY,
+                post_limit INTEGER DEFAULT 5,
+                notifications_enabled BOOLEAN DEFAULT TRUE
+            );
+            """)
 
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_settings (
-            user_id BIGINT PRIMARY KEY,
-            post_limit INTEGER DEFAULT 5,
-            notifications_enabled BOOLEAN DEFAULT TRUE
-        );
-        """)
+            # جدول های مربوط به پست/هشتگ — ابتدا هشتگ‌ها و پست‌ها
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hashtags (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE
+            );
+            """)
 
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS posts (
+                id SERIAL PRIMARY KEY,
+                message_id BIGINT UNIQUE,
+                title TEXT,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT now()
+            );
+            """)
 
-    async with pool.acquire() as conn:
-        # جدول orders (اگر نبود ساخته میشه)
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            service_id INTEGER,
-            order_code TEXT UNIQUE,
-            docs TEXT,
-            status TEXT DEFAULT 'new',
-            created_at TIMESTAMP DEFAULT now()
-        )
-        """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS post_hashtags (
+                post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+                hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
+                PRIMARY KEY (post_id, hashtag_id)
+            );
+            """)
 
-        # اگر ستون docs قبلاً ساخته نشده باشه، اضافه بشه
-        await conn.execute("""
-        ALTER TABLE orders
-        ADD COLUMN IF NOT EXISTS docs TEXT
-        """)
+            # جدول اشتراک (اکنون که hashtags وجود دارد)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id BIGINT,
+                hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
+                PRIMARY KEY (user_id, hashtag_id)
+            );
+            """)
 
-        await conn.execute("""
-        ALTER TABLE orders
-        ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
-        """)
-        
-        # اطمینان از وجود ستون service_id
-        await conn.execute("""
-        ALTER TABLE orders
-        ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES services(id) ON DELETE CASCADE
-        """)
-        
-        # 📌 جدول جدید برای订 خبر
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id BIGINT,
-            hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
-            PRIMARY KEY (user_id, hashtag_id)
-        )
-        """)
-        
-        # جدول پست‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            id SERIAL PRIMARY KEY,
-            message_id BIGINT UNIQUE,
-            title TEXT,
-            content TEXT,
-            created_at TIMESTAMP DEFAULT now()
-        )
-        """)
-        # جدول هشتگ‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS hashtags (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE
-        )
-        """)
+            # بقیه جداول (provinces, cities, cafenets)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS provinces (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE
+            );
+            """)
 
-        # رابطه بین پست‌ها و هشتگ‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS post_hashtags (
-            post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
-            hashtag_id INTEGER REFERENCES hashtags(id) ON DELETE CASCADE,
-            PRIMARY KEY (post_id, hashtag_id)
-        )
-        """)
-        # جدول استان‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS provinces (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE
-        );
-        """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS cities (
+                id SERIAL PRIMARY KEY,
+                province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
+                name TEXT
+            );
+            """)
 
-        # جدول شهرها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS cities (
-            id SERIAL PRIMARY KEY,
-            province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
-            name TEXT
-        );
-        """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS cafenets (
+                id SERIAL PRIMARY KEY,
+                province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
+                city_id INTEGER REFERENCES cities(id) ON DELETE CASCADE,
+                name TEXT,
+                address TEXT,
+                phone TEXT,
+                created_at TIMESTAMP DEFAULT now()
+            );
+            """)
 
-        # جدول کافی‌نت‌ها
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS cafenets (
-            id SERIAL PRIMARY KEY,
-            province_id INTEGER REFERENCES provinces(id) ON DELETE CASCADE,
-            city_id INTEGER REFERENCES cities(id) ON DELETE CASCADE,
-            name TEXT,
-            address TEXT,
-            phone TEXT,
-            created_at TIMESTAMP DEFAULT now()
-        );
-        """)
-
-
-
-    print("✅ دیتابیس آماده شد.")
+        print("✅ دیتابیس آماده شد.")
+    except Exception as e:
+        print(f"❌ خطا در init_db: {e}")
+        raise
 
 
 # ---------------- کیبورد ----------------
@@ -1173,69 +1143,82 @@ async def process_channel_post(message: types.Message):
     """
     هندلر واحد برای ذخیره پست‌های کانال و ارسال خودکار به کاربران سابسکرایب‌شده.
     """
-    # --- ۱. استخراج اطلاعات پست ---
-    title = (message.caption or message.text or "").split("\n")[0][:150]
-    content = message.caption or message.text or ""
-    hashtags = [tag.lstrip("#") for tag in content.split() if tag.startswith("#")]
+    try:
+        if pool is None:
+            print("⚠️ pool دیتابیس آماده نشده — نمی‌توان پست را ذخیره کرد.")
+            return
 
-    if not title:
-        title = "پست بدون عنوان"
+        # --- ۱. استخراج اطلاعات پست ---
+        title = (message.caption or message.text or "").split("\n")[0][:150]
+        content = message.caption or message.text or ""
+        hashtags = [tag.lstrip("#") for tag in content.split() if tag.startswith("#")]
 
-    # --- ۲. ذخیره پست در دیتابیس ---
-    async with pool.acquire() as conn:
-        # ذخیره در جدول posts
-        post_row = await conn.fetchrow("""
-            INSERT INTO posts (message_id, title, content, created_at)
-            VALUES ($1, $2, $3, NOW())
-            RETURNING id
-        """, message.message_id, title, content)
-        post_id = post_row["id"]
+        if not title:
+            title = "پست بدون عنوان"
 
-        # ذخیره هشتگ‌ها و اتصال آنها به پست
-        for tag in hashtags:
-            hashtag_row = await conn.fetchrow(
-                "INSERT INTO hashtags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
-                tag
-            )
-            hashtag_id = hashtag_row["id"]
-            await conn.execute(
-                "INSERT INTO post_hashtags (post_id, hashtag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                post_id, hashtag_id
-            )
+        # --- ۲. ذخیره پست در دیتابیس ---
+        async with pool.acquire() as conn:
+            # استفاده از ON CONFLICT تا duplicate باعث crash نشود
+            post_row = await conn.fetchrow("""
+                INSERT INTO posts (message_id, title, content, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (message_id) DO UPDATE
+                  SET title=EXCLUDED.title, content=EXCLUDED.content
+                RETURNING id
+            """, message.message_id, title, content)
+            post_id = post_row["id"]
 
-    # --- ۳. ارسال خودکار به کاربران مشترک ---
-    async with pool.acquire() as conn:
-        for tag in hashtags:
-            # گرفتن آیدی هشتگ از جدول hashtags
-            hashtag_row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", tag)
-            if not hashtag_row:
-                continue
-            hashtag_id = hashtag_row["id"]
+            # ذخیره هشتگ‌ها و اتصال آنها به پست
+            for tag in hashtags:
+                # اگر رشته خالی بود نادیده بگیر
+                if not tag:
+                    continue
+                hashtag_row = await conn.fetchrow(
+                    "INSERT INTO hashtags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+                    tag
+                )
+                hashtag_id = hashtag_row["id"]
+                await conn.execute(
+                    "INSERT INTO post_hashtags (post_id, hashtag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    post_id, hashtag_id
+                )
 
-            # دریافت کاربران مشترک برای این هشتگ که اعلان فعال دارند
-            users = await conn.fetch("""
-                SELECT s.user_id FROM subscriptions s
-                JOIN user_settings us ON us.user_id = s.user_id
-                WHERE s.hashtag_id=$1 AND us.notifications_enabled=TRUE
-            """, hashtag_id)
+        # --- ۳. ارسال خودکار به کاربران مشترک ---
+        async with pool.acquire() as conn:
+            for tag in hashtags:
+                if not tag:
+                    continue
+                hashtag_row = await conn.fetchrow("SELECT id FROM hashtags WHERE name=$1", tag)
+                if not hashtag_row:
+                    continue
+                hashtag_id = hashtag_row["id"]
 
-            # ارسال پست به هر کاربر
-            for u in users:
-                try:
-                    summary = (content[:200] + "...") if len(content) > 200 else content
-                    kb = InlineKeyboardMarkup().add(
-                        InlineKeyboardButton("🔽 نمایش کامل", callback_data=f"full_{post_id}")
-                    )
-                    await bot.send_message(
-                        u["user_id"],
-                        f"📢 <b>{title}</b>\n\n{summary}",
-                        parse_mode="HTML",
-                        reply_markup=kb
-                    )
-                except Exception as e:
-                    print(f"⚠️ خطا در ارسال خودکار برای کاربر {u['user_id']}: {e}")
+                users = await conn.fetch("""
+                    SELECT s.user_id FROM subscriptions s
+                    JOIN user_settings us ON us.user_id = s.user_id
+                    WHERE s.hashtag_id=$1 AND us.notifications_enabled=TRUE
+                """, hashtag_id)
 
-    print(f"✅ پست {post_id} ذخیره و به کاربران مرتبط ارسال شد.")
+                for u in users:
+                    try:
+                        summary = (content[:200] + "...") if len(content) > 200 else content
+                        kb = InlineKeyboardMarkup().add(
+                            InlineKeyboardButton("🔽 نمایش کامل", callback_data=f"full_{post_id}")
+                        )
+                        await bot.send_message(
+                            u["user_id"],
+                            f"📢 <b>{title}</b>\n\n{summary}",
+                            parse_mode="HTML",
+                            reply_markup=kb
+                        )
+                    except Exception as e:
+                        print(f"⚠️ خطا در ارسال خودکار برای کاربر {u['user_id']}: {e}")
+
+        print(f"✅ پست {post_id} ذخیره و به کاربران مرتبط ارسال شد.")
+
+    except Exception as e:
+        print(f"❌ خطا در process_channel_post: {e}")
+
 
 
 
