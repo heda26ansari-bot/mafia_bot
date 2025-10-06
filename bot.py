@@ -1183,6 +1183,24 @@ async def process_channel_post(message: types.Message):
                     post_id, hashtag_id
                 )
 
+            # --- محدودیت حداکثر ۱۰۰ پست ---
+            count = await conn.fetchval("SELECT COUNT(*) FROM posts")
+            if count > 100:
+                excess = count - 100
+                old_ids = await conn.fetch(
+                    "SELECT id FROM posts ORDER BY created_at ASC LIMIT $1", excess
+                )
+                old_ids = [r["id"] for r in old_ids]
+                if old_ids:
+                    await conn.execute(
+                        "DELETE FROM post_hashtags WHERE post_id = ANY($1::int[])", old_ids
+                    )
+                    await conn.execute(
+                        "DELETE FROM posts WHERE id = ANY($1::int[])", old_ids
+                    )
+                    print(f"🧹 {len(old_ids)} پست قدیمی حذف شد (برای حفظ محدودیت ۱۰۰ پست).")
+
+
         # --- ۳. ارسال خودکار به کاربران مشترک ---
         async with pool.acquire() as conn:
             for tag in hashtags:
