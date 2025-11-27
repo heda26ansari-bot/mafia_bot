@@ -175,11 +175,24 @@ async def init_db():
             );
             """)
 
+            
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();
+            ALTER TABLE cafenets
+            ADD COLUMN owner_user_id BIGINT;
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
         print(f"❌ خطا در init_db: {e}")
         raise
+
+@dp.message_handler()
+async def update_last_seen(msg: types.Message):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_seen = NOW() WHERE user_id=$1",
+            msg.from_user.id
+        )
 
 
 # ---------------- کیبورد ----------------
@@ -468,6 +481,9 @@ class RegisterCafeNet(StatesGroup):
 
 @dp.callback_query_handler(lambda c: c.data == "register_cafenet")
 async def choose_province_for_register(call: types.CallbackQuery):
+    INSERT INTO cafenets (name, province_id, city_id, address, phone, owner_user_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+
     async with pool.acquire() as conn:
         provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
     kb = InlineKeyboardMarkup(row_width=2)
@@ -703,6 +719,9 @@ async def manage_services(message: types.Message):
     kb.add(KeyboardButton("➕ افزودن خدمات"))
     kb.add(KeyboardButton("❌ حذف خدمات"))
     kb.add(KeyboardButton("➕ افزودن ابزار"))
+    kb.add(KeyboardButton("👤 مدیریت کاربران"))
+    kb.add(KeyboardButton("📨 ارسال پیام انبوه"))
+    kb.add(KeyboardButton("🏢 مدیریت کافی‌نت"))
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
 
     await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
@@ -740,7 +759,7 @@ async def start_cmd(msg: types.Message):
 
     await msg.answer(
         f"سلام {msg.from_user.first_name} 👋\n"
-        "به ربات کافی نت مجازی خوش اومدی.",
+        "به ربات  مجازی خوش اومدی.",
         reply_markup=main_menu()
     )
 
@@ -900,6 +919,13 @@ async def show_tool_message(call: types.CallbackQuery):
         tool = await conn.fetchrow("SELECT name, message FROM tools WHERE id=$1", tool_id)
 
     kb = InlineKeyboardMarkup()
+
+    # اگر مدیر است → گزینه‌های مدیریت نیز نمایش داده شود
+    if call.from_user.id in ADMINS:
+        kb.add(InlineKeyboardButton("✏️ ویرایش ابزار", callback_data=f"edit_tool_{tool_id}"))
+        kb.add(InlineKeyboardButton("🗑 حذف ابزار", callback_data=f"delete_tool_{tool_id}"))
+
+    # گزینه برگشت برای همه
     kb.add(InlineKeyboardButton("🔙 برگشت", callback_data="back_to_tools"))
 
     await call.message.edit_text(
@@ -907,6 +933,21 @@ async def show_tool_message(call: types.CallbackQuery):
         parse_mode="HTML",
         reply_markup=kb
     )
+
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_tool_"))
+async def edit_tool_start(call: types.CallbackQuery):
+    if call.from_user.id not in ADMINS:
+        return await call.answer("⛔ فقط مدیر می‌تواند ابزار را ویرایش کند.", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_tool_"))
+async def delete_tool_confirm(call: types.CallbackQuery):
+    if call.from_user.id not in ADMINS:
+        return await call.answer("⛔ فقط مدیر می‌تواند ابزار را حذف کند.", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_yes_"))
+async def delete_tool(call: types.CallbackQuery):
+    if call.from_user.id not in ADMINS:
+        return await call.answer("⛔ فقط مدیر می‌تواند حذف کند.", show_alert=True)
 
 
 @dp.callback_query_handler(lambda c: c.data == "back_to_tools")
@@ -926,6 +967,675 @@ async def back_to_main(call: types.CallbackQuery):
     await call.message.edit_text("منو اصلی:")
     await call.message.answer("👇 انتخاب کن:", reply_markup=main_menu())
 
+# ===============================
+# ویرایش ابزار
+# ===============================
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_tool_"))
+async def edit_tool_start(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[2])
+    edit_tool_state[call.from_user.id] = {"step": 1, "tool_id": tool_id}
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📝 ویرایش نام", callback_data=f"edit_name_{tool_id}"))
+    kb.add(InlineKeyboardButton("💬 ویرایش پیام", callback_data=f"edit_msg_{tool_id}"))
+    kb.add(InlineKeyboardButton("🔙 برگشت", callback_data=f"tool_{tool_id}"))
+
+    await call.message.edit_text(
+        "کدام بخش ابزار را می‌خواهی ویرایش کنی؟",
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_name_"))
+async def edit_name_request(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[2])
+
+    edit_tool_state[call.from_user.id] = {"step": "name", "tool_id": tool_id}
+
+    await call.message.edit_text("📝 نام جدید ابزار را ارسال کنید:")
+
+@dp.message_handler(lambda m: m.from_user.id in edit_tool_state and edit_tool_state[m.from_user.id]["step"] == "name")
+async def edit_name_save(msg: types.Message):
+    data = edit_tool_state[msg.from_user.id]
+    tool_id = data["tool_id"]
+
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE tools SET name=$1 WHERE id=$2", msg.text, tool_id)
+
+    edit_tool_state.pop(msg.from_user.id, None)
+
+    await msg.answer("✅ نام ابزار با موفقیت به‌روزرسانی شد.")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_msg_"))
+async def edit_message_request(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[2])
+
+    edit_tool_state[call.from_user.id] = {"step": "message", "tool_id": tool_id}
+
+    await call.message.edit_text("💬 پیام جدید ابزار را ارسال کنید:")
+
+@dp.message_handler(lambda m: m.from_user.id in edit_tool_state and edit_tool_state[m.from_user.id]["step"] == "message")
+async def edit_message_save(msg: types.Message):
+    data = edit_tool_state[msg.from_user.id]
+    tool_id = data["tool_id"]
+
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE tools SET message=$1 WHERE id=$2", msg.text, tool_id)
+
+    edit_tool_state.pop(msg.from_user.id, None)
+
+    await msg.answer("✅ پیام ابزار با موفقیت ویرایش شد.")
+
+# ===============================
+# حذف ابزار
+# ===============================
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_tool_"))
+async def delete_tool_confirm(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[2])
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🗑 حذف نهایی", callback_data=f"delete_yes_{tool_id}"))
+    kb.add(InlineKeyboardButton("❌ لغو", callback_data=f"tool_{tool_id}"))
+
+    await call.message.edit_text(
+        "⚠️ آیا از حذف این ابزار مطمئن هستی؟",
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(lambda c: c.data.startswith("delete_yes_"))
+async def delete_tool(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[2])
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM tools WHERE id=$1", tool_id)
+
+    await call.message.edit_text("🗑 ابزار با موفقیت حذف شد.")
+
+
+
+# ======================
+# مدیریت کاربران
+# =======================
+@dp.message_handler(lambda m: m.text == "👤 مدیریت کاربران")
+async def user_management_panel(msg: types.Message):
+    if msg.from_user.id not in ADMINS:
+        return await msg.answer("⛔ اجازه دسترسی ندارید.")
+    
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📅 کاربران امروز", callback_data="users_today"))
+    kb.add(InlineKeyboardButton("📆 کاربران هفته", callback_data="users_week"))
+    kb.add(InlineKeyboardButton("🗓 کاربران ماه", callback_data="users_month"))
+    kb.add(InlineKeyboardButton("📊 تعداد کل کاربران", callback_data="users_count"))
+    kb.add(InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="users_search"))
+    kb.add(InlineKeyboardButton("🗂 کاربران بر اساس استان", callback_data="users_by_province"))
+    kb.add(InlineKeyboardButton("⏱ آخرین فعالیت‌ها", callback_data="users_last_seen"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+
+    await msg.answer("یک فیلتر انتخاب کنید:", reply_markup=kb)
+
+
+async def fetch_users(filter_type):
+    async with pool.acquire() as conn:
+        if filter_type == "today":
+            return await conn.fetch("SELECT user_id FROM users WHERE created_at::date = CURRENT_DATE")
+        
+        elif filter_type == "week":
+            return await conn.fetch("""
+                SELECT user_id FROM users 
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+            """)
+        
+        elif filter_type == "month":
+            return await conn.fetch("""
+                SELECT user_id FROM users 
+                WHERE created_at >= NOW() - INTERVAL '30 days'
+            """)
+
+@dp.callback_query_handler(lambda c: c.data in ["users_today", "users_week", "users_month"])
+async def show_filtered_users(call: types.CallbackQuery):
+    filter_map = {
+        "users_today": "today",
+        "users_week": "week",
+        "users_month": "month"
+    }
+
+    filter_type = filter_map[call.data]
+    rows = await fetch_users(filter_type)
+
+    if not rows:
+        return await call.message.edit_text("هیچ کاربری پیدا نشد.", reply_markup=InlineKeyboardMarkup().add(
+            InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back")
+        ))
+
+    text = "👥 کاربران:\n\n"
+    for r in rows:
+        text += f"• <code>{r['user_id']}</code>\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کاربر", callback_data=f"manage_user_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+user_manage_state = {}
+
+@dp.callback_query_handler(lambda c: c.data == "manage_user_select")
+async def ask_user_id(call: types.CallbackQuery):
+    user_manage_state[call.from_user.id] = "awaiting_user_id"
+    await call.message.edit_text("🔎 آیدی عددی کاربر را ارسال کنید:")
+
+@dp.message_handler(lambda m: user_manage_state.get(m.from_user.id) == "awaiting_user_id")
+async def show_user_info(msg: types.Message):
+    user_manage_state.pop(msg.from_user.id, None)
+    
+    try:
+        uid = int(msg.text)
+    except:
+        return await msg.answer("❌ آیدی معتبر نیست.")
+
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", uid)
+
+        if not user:
+            return await msg.answer("❌ کاربر پیدا نشد.")
+
+        hashtags = await conn.fetch("""
+            SELECT h.name FROM subscriptions s 
+            JOIN hashtags h ON h.id = s.hashtag_id 
+            WHERE s.user_id=$1
+        """, uid)
+
+        orders = await conn.fetch("""
+            SELECT id FROM orders WHERE user_id=$1 AND status != 'done'
+        """, uid)
+
+        cafenet = await conn.fetchrow("""
+            SELECT name FROM cafenets WHERE id =
+              (SELECT cafenet_id FROM user_settings WHERE user_id=$1)
+        """, uid)
+
+    hashtag_list = ", ".join([h["name"] for h in hashtags]) if hashtags else "ندارد"
+    order_list = ", ".join([str(o["id"]) for o in orders]) if orders else "ندارد"
+    cafenet_name = cafenet["name"] if cafenet else "ثبت نشده"
+
+    text = (
+        f"👤 <b>مشخصات کاربر</b>\n\n"
+        f"🆔 آیدی عددی: <code>{uid}</code>\n"
+        f"👤 نام: {user['first_name']}\n"
+        f"🔗 یوزرنیم: @{user['username'] if user['username'] else 'ندارد'}\n"
+        f"📅 تاریخ عضویت: {user['created_at']}\n"
+        f"🏷 هشتگ‌های فعال: {hashtag_list}\n"
+        f"📦 سفارش‌های فعال: {order_list}\n"
+        f"🏢 کافی‌نت ثبت‌شده: {cafenet_name}"
+    )
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🗑 حذف کاربر", callback_data=f"del_user_{uid}"))
+    kb.add(InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"block_user_{uid}"))
+    kb.add(InlineKeyboardButton("♻️ آن‌بلاک کاربر", callback_data=f"unblock_user_{uid}"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("del_user_"))
+async def confirm_delete_user(call: types.CallbackQuery):
+    uid = int(call.data.replace("del_user_", ""))
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🗑 حذف نهایی", callback_data=f"del_user_yes_{uid}"))
+    kb.add(InlineKeyboardButton("❌ انصراف", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text("⚠️ آیا از حذف کاربر مطمئنی؟", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("del_user_yes_"))
+async def delete_user(call: types.CallbackQuery):
+    uid = int(call.data.replace("del_user_yes_", ""))
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM users WHERE user_id=$1", uid)
+        await conn.execute("DELETE FROM subscriptions WHERE user_id=$1", uid)
+        await conn.execute("DELETE FROM user_settings WHERE user_id=$1", uid)
+        await conn.execute("DELETE FROM orders WHERE user_id=$1", uid)
+
+    await call.message.edit_text("🗑 کاربر حذف شد.")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("block_user_"))
+async def block_user(call: types.CallbackQuery):
+    uid = int(call.data.replace("block_user_", ""))
+
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET is_blocked=TRUE WHERE user_id=$1", uid)
+
+    await call.message.edit_text("🚫 کاربر با موفقیت بلاک شد.")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("unblock_user_"))
+async def unblock_user(call: types.CallbackQuery):
+    uid = int(call.data.replace("unblock_user_", ""))
+
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET is_blocked=FALSE WHERE user_id=$1", uid)
+
+    await call.message.edit_text("♻️ کاربر با موفقیت آزاد شد.")
+
+
+
+@dp.callback_query_handler(lambda c: c.data == "user_mgmt_back")
+async def user_mgmt_back(call: types.CallbackQuery):
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📅 کاربران امروز", callback_data="users_today"))
+    kb.add(InlineKeyboardButton("📆 کاربران هفته", callback_data="users_week"))
+    kb.add(InlineKeyboardButton("🗓 کاربران ماه", callback_data="users_month"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+
+    await call.message.edit_text("یک فیلتر انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "users_count")
+async def users_count(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM users")
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text(
+        f"📊 تعداد کل کاربران ثبت‌شده:\n\n<b>{count} نفر</b>",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+user_search_state = {}
+
+@dp.callback_query_handler(lambda c: c.data == "users_search")
+async def user_search_start(call: types.CallbackQuery):
+    user_search_state[call.from_user.id] = True
+    await call.message.edit_text("🔍 نام یا یوزرنیم کاربر را وارد کنید:")
+
+@dp.message_handler(lambda m: user_search_state.get(m.from_user.id))
+async def user_search_result(msg: types.Message):
+    term = msg.text.strip()
+    user_search_state.pop(msg.from_user.id, None)
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT user_id, first_name, username
+            FROM users
+            WHERE first_name ILIKE $1 OR username ILIKE $1
+        """, f"%{term}%")
+
+    if not rows:
+        return await msg.answer("❌ هیچ کاربری با این مشخصات یافت نشد.")
+
+    text = "🔍 نتایج جستجو:\n\n"
+    for r in rows:
+        text += f"👤 {r['first_name'] or ''} | @{r['username'] or '---'}\n"
+        text += f"🆔 <code>{r['user_id']}</code>\n\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کاربر", callback_data="manage_user_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "users_by_province")
+async def users_by_province(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+
+    kb = InlineKeyboardMarkup()
+    for p in provinces:
+        kb.add(InlineKeyboardButton(p["name"], callback_data=f"userprov_{p['id']}"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text("🗂 استان مورد نظر را انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("userprov_"))
+async def users_by_province_list(call: types.CallbackQuery):
+    prov_id = int(call.data.split("_")[1])
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.user_id
+            FROM users u
+            JOIN user_settings us ON us.user_id = u.user_id
+            JOIN cafenets c ON c.id = us.cafenet_id
+            WHERE c.province_id = $1
+        """, prov_id)
+
+    if not rows:
+        return await call.message.edit_text("❌ هیچ کاربری در این استان ثبت نشده.")
+
+    text = "👥 کاربران این استان:\n\n"
+    for r in rows:
+        text += f"• <code>{r['user_id']}</code>\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کاربر", callback_data="manage_user_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "user_mgmt_back")
+async def user_mgmt_back(call: types.CallbackQuery):
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📅 کاربران امروز", callback_data="users_today"))
+    kb.add(InlineKeyboardButton("📆 کاربران هفته", callback_data="users_week"))
+    kb.add(InlineKeyboardButton("🗓 کاربران ماه", callback_data="users_month"))
+    kb.add(InlineKeyboardButton("📊 تعداد کل کاربران", callback_data="users_count"))
+    kb.add(InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="users_search"))
+    kb.add(InlineKeyboardButton("🗂 کاربران بر اساس استان", callback_data="users_by_province"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+
+    await call.message.edit_text("یک فیلتر انتخاب کنید:", reply_markup=kb)
+
+broadcast_state = {}
+
+@dp.callback_query_handler(lambda c: c.data == "broadcast_start")
+async def broadcast_start(call: types.CallbackQuery):
+    broadcast_state[call.from_user.id] = True
+    await call.message.edit_text("📨 پیام مورد نظر برای ارسال انبوه را ارسال کنید:")
+
+@dp.message_handler(lambda m: broadcast_state.get(m.from_user.id))
+async def broadcast_send(msg: types.Message):
+    text = msg.text
+    broadcast_state.pop(msg.from_user.id, None)
+
+    async with pool.acquire() as conn:
+        users = await conn.fetch("SELECT user_id FROM users WHERE is_blocked=FALSE")
+
+    sent = 0
+    failed = 0
+
+    for u in users:
+        try:
+            await bot.send_message(u["user_id"], text)
+            sent += 1
+        except:
+            failed += 1
+            continue
+
+    await msg.answer(
+        f"📨 ارسال پیام انبوه تکمیل شد.\n\n"
+        f"✔️ ارسال موفق: {sent}\n"
+        f"❌ ارسال ناموفق: {failed}"
+    )
+
+@dp.callback_query_handler(lambda c: c.data == "users_last_seen")
+async def users_last_seen(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT user_id, first_name, username, last_seen
+            FROM users
+            ORDER BY last_seen DESC
+            LIMIT 20
+        """)
+
+    if not rows:
+        return await call.message.edit_text("هیچ کاربری یافت نشد.")
+
+    text = "⏱ <b>آخرین فعالیت کاربران:</b>\n\n"
+    for r in rows:
+        text += (
+            f"👤 {r['first_name']} | @{r['username'] or '---'}\n"
+            f"🆔 <code>{r['user_id']}</code>\n"
+            f"📅 {r['last_seen']}\n\n"
+        )
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کاربر", callback_data="manage_user_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="user_mgmt_back"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ======================
+# مدیریت کافی‌نت
+# =======================
+@dp.message_handler(lambda m: m.text == "🏢 مدیریت کافی‌نت")
+async def manage_cafenet(msg: types.Message):
+    if msg.from_user.id not in ADMINS:
+        return await msg.answer("⛔ اجازه دسترسی ندارید.")
+    
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📋 نمایش همه کافی‌نت‌ها", callback_data="cn_all"))
+    kb.add(InlineKeyboardButton("🌍 فیلتر بر اساس استان", callback_data="cn_filter_province"))
+    kb.add(InlineKeyboardButton("🏙 فیلتر بر اساس شهر", callback_data="cn_filter_city"))
+    kb.add(InlineKeyboardButton("🔍 جستجو با نام", callback_data="cn_search"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+
+    await msg.answer("🏢 مدیریت کافی نت‌ها:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "cn_filter_province")
+async def select_cafenet_province(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+
+    kb = InlineKeyboardMarkup()
+    for p in provinces:
+        kb.add(InlineKeyboardButton(p["name"], callback_data=f"cn_prov_{p['id']}"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text("🌍 یک استان انتخاب کنید:", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("cn_all"))
+async def show_all_cafenets(call: types.CallbackQuery):
+    page = int(call.data.split("_")[2]) if "_" in call.data else 1
+    limit = 20
+    offset = (page - 1) * limit
+
+    async with pool.acquire() as conn:
+        cafenets = await conn.fetch("""
+            SELECT id, name FROM cafenets
+            ORDER BY id
+            LIMIT $1 OFFSET $2
+        """, limit, offset)
+
+        total = await conn.fetchval("SELECT COUNT(*) FROM cafenets")
+
+    if not cafenets:
+        return await call.message.edit_text("❌ هیچ کافی‌نت ثبت نشده است.")
+
+    text = f"📋 <b>لیست کافی‌نت‌ها (صفحه {page})</b>\n\n"
+
+    for c in cafenets:
+        text += f"• {c['name']} — ID: <code>{c['id']}</code>\n"
+
+    # دکمه‌ها
+    kb = InlineKeyboardMarkup()
+
+    # صفحه قبل
+    if page > 1:
+        kb.add(InlineKeyboardButton("⬅️ صفحه قبل", callback_data=f"cn_all_{page-1}"))
+
+    # صفحه بعد
+    if offset + limit < total:
+        kb.add(InlineKeyboardButton("➡️ صفحه بعد", callback_data=f"cn_all_{page+1}"))
+
+    # مدیریت
+    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.message_handler(lambda m: cafenet_manage_state.get(m.from_user.id))
+async def show_cafenet_info(msg: types.Message):
+    cafenet_manage_state.pop(msg.from_user.id, None)
+
+    try:
+        cid = int(msg.text)
+    except:
+        return await msg.answer("❌ آیدی معتبر نیست.")
+
+    async with pool.acquire() as conn:
+        cnet = await conn.fetchrow("""
+            SELECT c.id, c.name, c.address, c.phone,
+                   p.name AS province, ci.name AS city,
+                   c.owner_user_id
+            FROM cafenets c
+            JOIN provinces p ON p.id = c.province_id
+            JOIN cities ci ON ci.id = c.city_id
+            WHERE c.id=$1
+        """, cid)
+
+        if not cnet:
+            return await msg.answer("❌ کافی‌نت پیدا نشد.")
+
+        # متصدی کافی‌نت
+        owner_id = cnet["owner_user_id"]
+
+        if owner_id:
+            # گرفتن نام کاربر
+            user = await conn.fetchrow("""
+                SELECT full_name, username FROM users WHERE user_id=$1
+            """, owner_id)
+
+            if user:
+                owner_text = (
+                    f"{user['full_name']} " +
+                    (f"(@{user['username']})" if user['username'] else "")
+                )
+            else:
+                owner_text = f"<code>{owner_id}</code>"
+        else:
+            owner_text = "— ثبت نشده —"
+
+    text = (
+        f"🏢 <b>مشخصات کافی‌نت</b>\n\n"
+        f"🆔 ID: <code>{cid}</code>\n"
+        f"📛 نام: {cnet['name']}\n"
+        f"📍 استان: {cnet['province']}\n"
+        f"🏙 شهر: {cnet['city']}\n"
+        f"📬 آدرس: {cnet['address']}\n"
+        f"📞 تلفن: {cnet['phone']}\n\n"
+        f"👤 <b>متصدی کافی‌نت:</b> {owner_text}\n"
+    )
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "back_cafenet")
+async def back_to_cafenet_menu(call: types.CallbackQuery):
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🌍 فیلتر بر اساس استان", callback_data="cn_filter_province"))
+    kb.add(InlineKeyboardButton("🏙 فیلتر بر اساس شهر", callback_data="cn_filter_city"))
+    kb.add(InlineKeyboardButton("🔍 جستجو با نام", callback_data="cn_search"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+
+    await call.message.edit_text("🏢 مدیریت کافی‌نت‌ها:", reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data == "cn_filter_province")
+async def select_cafenet_province(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+
+    kb = InlineKeyboardMarkup()
+    for p in provinces:
+        kb.add(InlineKeyboardButton(p["name"], callback_data=f"cn_prov_{p['id']}"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text("🌍 یک استان انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("cn_prov_"))
+async def show_cafenets_by_province(call: types.CallbackQuery):
+    prov_id = int(call.data.split("_")[2])
+
+    async with pool.acquire() as conn:
+        nets = await conn.fetch("""
+            SELECT id, name, city_id FROM cafenets WHERE province_id=$1
+        """, prov_id)
+
+    if not nets:
+        return await call.message.edit_text("❌ هیچ کافی‌نتی در این استان ثبت نشده.")
+
+    text = "🏢 لیست کافی‌نت‌ها:\n\n"
+    for cnet in nets:
+        text += f"• {cnet['name']} (ID: <code>{cnet['id']}</code>)\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "cn_filter_city")
+async def select_cafenet_city(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        cities = await conn.fetch("""
+            SELECT c.id, c.name, p.name AS province
+            FROM cities c
+            JOIN provinces p ON p.id = c.province_id
+            ORDER BY p.name, c.name
+        """)
+
+    kb = InlineKeyboardMarkup()
+    for ct in cities:
+        kb.add(InlineKeyboardButton(f"{ct['province']} - {ct['name']}", callback_data=f"cn_city_{ct['id']}"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text("🏙 یک شهر انتخاب کنید:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("cn_city_"))
+async def show_cafenets_by_city(call: types.CallbackQuery):
+    city_id = int(call.data.split("_")[2])
+
+    async with pool.acquire() as conn:
+        nets = await conn.fetch("""
+            SELECT id, name FROM cafenets WHERE city_id=$1
+        """, city_id)
+
+    if not nets:
+        return await call.message.edit_text("❌ هیچ کافی‌نتی در این شهر ثبت نشده.")
+
+    text = "🏢 کافی‌نت‌ها:\n\n"
+    for cnet in nets:
+        text += f"• {cnet['name']} (ID: <code>{cnet['id']}</code>)\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+cafenet_search_state = {}
+
+@dp.callback_query_handler(lambda c: c.data == "cn_search")
+async def ask_cafenet_name(call: types.CallbackQuery):
+    cafenet_search_state[call.from_user.id] = True
+    await call.message.edit_text("🔍 نام کافی‌نت را وارد کنید:")
+
+@dp.message_handler(lambda m: cafenet_search_state.get(m.from_user.id))
+async def search_cafenet(msg: types.Message):
+    term = msg.text.strip()
+    cafenet_search_state.pop(msg.from_user.id, None)
+
+    async with pool.acquire() as conn:
+        nets = await conn.fetch("""
+            SELECT id, name, province_id, city_id
+            FROM cafenets
+            WHERE name ILIKE $1
+        """, f"%{term}%")
+
+    if not nets:
+        return await msg.answer("❌ کافی‌نتی پیدا نشد.")
+
+    text = "🔍 نتایج:\n\n"
+    for n in nets:
+        text += f"• {n['name']} (ID: <code>{n['id']}</code>)\n"
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
+    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+
+    await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+cafenet_manage_state = {}
+
+@dp.callback_query_handler(lambda c: c.data == "cn_manage_select")
+async def ask_cafenet_id(call: types.CallbackQuery):
+    cafenet_manage_state[call.from_user.id] = True
+    await call.message.edit_text("🔎 آیدی عددی کافی‌نت را ارسال کنید:")
 
 
 # ========================
