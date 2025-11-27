@@ -203,6 +203,7 @@ async def init_db():
         print(f"❌ خطا در init_db: {e}")
         raise
 
+
 @dp.message_handler()
 async def update_last_seen(msg: types.Message):
     async with pool.acquire() as conn:
@@ -1073,21 +1074,21 @@ async def delete_tool(call: types.CallbackQuery):
 # مدیریت کاربران
 # =======================
 @dp.message_handler(lambda m: m.text == "👤 مدیریت کاربران")
-async def user_management_panel(msg: types.Message):
-    if msg.from_user.id not in ADMINS:
-        return await msg.answer("⛔ اجازه دسترسی ندارید.")
-    
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("📅 کاربران امروز", callback_data="users_today"))
-    kb.add(InlineKeyboardButton("📆 کاربران هفته", callback_data="users_week"))
-    kb.add(InlineKeyboardButton("🗓 کاربران ماه", callback_data="users_month"))
-    kb.add(InlineKeyboardButton("📊 تعداد کل کاربران", callback_data="users_count"))
-    kb.add(InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="users_search"))
-    kb.add(InlineKeyboardButton("🗂 کاربران بر اساس استان", callback_data="users_by_province"))
-    kb.add(InlineKeyboardButton("⏱ آخرین فعالیت‌ها", callback_data="users_last_seen"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+async def manage_users(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("⛔ اجازه دسترسی ندارید.")
 
-    await msg.answer("یک فیلتر انتخاب کنید:", reply_markup=kb)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("📅 کاربران امروز"))
+    kb.add(KeyboardButton("📆 کاربران هفته"))
+    kb.add(KeyboardButton("🗓 کاربران ماه"))
+    kb.add(KeyboardButton("⏱ آخرین فعالیت کاربران"))
+    kb.add(KeyboardButton("🔍 جستجوی کاربر"))
+    kb.add(KeyboardButton("📊 تعداد کل کاربران"))
+    kb.add(KeyboardButton("⬅️ بازگشت به مدیریت خدمات"))
+
+    await message.answer("👤 مدیریت کاربران:", reply_markup=kb)
+
 
 
 async def fetch_users(filter_type):
@@ -1345,15 +1346,18 @@ async def user_mgmt_back(call: types.CallbackQuery):
 
 broadcast_state = {}
 
-@dp.callback_query_handler(lambda c: c.data == "broadcast_start")
-async def broadcast_start(call: types.CallbackQuery):
-    broadcast_state[call.from_user.id] = True
-    await call.message.edit_text("📨 پیام مورد نظر برای ارسال انبوه را ارسال کنید:")
+@dp.message_handler(lambda m: m.text == "📨 ارسال پیام انبوه")
+async def broadcast_start(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("⛔ اجازه دسترسی ندارید.")
+
+    broadcast_state[message.from_user.id] = True
+    await message.answer("📨 لطفاً پیام موردنظر برای ارسال انبوه را ارسال کنید:")
 
 @dp.message_handler(lambda m: broadcast_state.get(m.from_user.id))
-async def broadcast_send(msg: types.Message):
-    text = msg.text
-    broadcast_state.pop(msg.from_user.id, None)
+async def broadcast_send(message: types.Message):
+    text = message.text
+    del broadcast_state[message.from_user.id]
 
     async with pool.acquire() as conn:
         users = await conn.fetch("SELECT user_id FROM users WHERE is_blocked=FALSE")
@@ -1364,16 +1368,13 @@ async def broadcast_send(msg: types.Message):
     for u in users:
         try:
             await bot.send_message(u["user_id"], text)
+            await asyncio.sleep(0.05)
             sent += 1
         except:
             failed += 1
-            continue
 
-    await msg.answer(
-        f"📨 ارسال پیام انبوه تکمیل شد.\n\n"
-        f"✔️ ارسال موفق: {sent}\n"
-        f"❌ ارسال ناموفق: {failed}"
-    )
+    await message.answer(f"✔️ ارسال موفق: {sent}\n❌ ارسال ناموفق: {failed}")
+
 
 @dp.callback_query_handler(lambda c: c.data == "users_last_seen")
 async def users_last_seen(call: types.CallbackQuery):
@@ -1407,40 +1408,72 @@ async def users_last_seen(call: types.CallbackQuery):
 # مدیریت کافی‌نت
 # =======================
 @dp.message_handler(lambda m: m.text == "🏢 مدیریت کافی‌نت")
-async def manage_cafenet(msg: types.Message):
-    if msg.from_user.id not in ADMINS:
-        return await msg.answer("⛔ اجازه دسترسی ندارید.")
-    
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("📋 نمایش همه کافی‌نت‌ها", callback_data="cn_all"))
-    kb.add(InlineKeyboardButton("🌍 فیلتر بر اساس استان", callback_data="cn_filter_province"))
-    kb.add(InlineKeyboardButton("🏙 فیلتر بر اساس شهر", callback_data="cn_filter_city"))
-    kb.add(InlineKeyboardButton("🔍 جستجو با نام", callback_data="cn_search"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_admin"))
+async def manage_cafenet(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("⛔ اجازه دسترسی ندارید.")
 
-    await msg.answer("🏢 مدیریت کافی نت‌ها:", reply_markup=kb)
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("📋 نمایش همه کافی‌نت‌ها"))
+    kb.add(KeyboardButton("🌍 فیلتر بر اساس استان"))
+    kb.add(KeyboardButton("🏙 فیلتر بر اساس شهر"))
+    kb.add(KeyboardButton("🔍 جستجو با نام"))
+    kb.add(KeyboardButton("⬅️ بازگشت به مدیریت خدمات"))
 
-@dp.callback_query_handler(lambda c: c.data == "cn_filter_province")
-async def select_cafenet_province(call: types.CallbackQuery):
+    await message.answer("🏢 مدیریت کافی‌نت‌ها:", reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "🌍 فیلتر بر اساس استان")
+async def filter_by_province(message: types.Message):
+    cafenet_filter_state[message.from_user.id] = "province"
+
     async with pool.acquire() as conn:
-        provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+        rows = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
 
-    kb = InlineKeyboardMarkup()
-    for p in provinces:
-        kb.add(InlineKeyboardButton(p["name"], callback_data=f"cn_prov_{p['id']}"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    for p in rows:
+        kb.add(f"{p['id']} - {p['name']}")
 
-    await call.message.edit_text("🌍 یک استان انتخاب کنید:", reply_markup=kb)
+    kb.add("⬅️ بازگشت")
+
+    await message.answer("🌍 استان موردنظر را انتخاب کنید:", reply_markup=kb)
 
 
-@dp.callback_query_handler(lambda c: c.data.startswith("cn_all"))
-async def show_all_cafenets(call: types.CallbackQuery):
-    page = int(call.data.split("_")[2]) if "_" in call.data else 1
+@dp.message_handler(lambda m: " - " in m.text and cafenet_filter_state.get(m.from_user.id) == "province")
+async def show_by_province(message: types.Message):
+    prov_id = int(message.text.split(" - ")[0])
+    del cafenet_filter_state[message.from_user.id]
+
+    async with pool.acquire() as conn:
+        nets = await conn.fetch("""
+            SELECT id, name FROM cafenets WHERE province_id=$1
+        """, prov_id)
+
+    if not nets:
+        return await message.answer("❌ هیچ کافی‌نتی در این استان نیست.")
+
+    text = f"🌍 کافی‌نت‌های این استان:\n\n"
+    for n in nets:
+        text += f"• {n['name']} (ID: {n['id']})\n"
+
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🔎 مدیریت کافی‌نت")
+    kb.add("⬅️ بازگشت")
+
+    await message.answer(text, reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text == "📋 نمایش همه کافی‌نت‌ها")
+async def show_all_cafenets(message: types.Message):
+    cafenet_page_state[message.from_user.id] = 1
+    await send_cafenet_list(message)
+
+
+async def send_cafenet_list(message):
+    uid = message.from_user.id
+    page = cafenet_page_state.get(uid, 1)
     limit = 20
     offset = (page - 1) * limit
 
     async with pool.acquire() as conn:
-        cafenets = await conn.fetch("""
+        nets = await conn.fetch("""
             SELECT id, name FROM cafenets
             ORDER BY id
             LIMIT $1 OFFSET $2
@@ -1448,30 +1481,40 @@ async def show_all_cafenets(call: types.CallbackQuery):
 
         total = await conn.fetchval("SELECT COUNT(*) FROM cafenets")
 
-    if not cafenets:
-        return await call.message.edit_text("❌ هیچ کافی‌نت ثبت نشده است.")
+    if not nets:
+        return await message.answer("❌ هیچ کافی‌نتی ثبت نشده.")
 
-    text = f"📋 <b>لیست کافی‌نت‌ها (صفحه {page})</b>\n\n"
+    text = f"📋 لیست کافی‌نت‌ها — صفحه {page}\n\n"
 
-    for c in cafenets:
-        text += f"• {c['name']} — ID: <code>{c['id']}</code>\n"
+    for n in nets:
+        text += f"• {n['name']} (ID: {n['id']})\n"
 
-    # دکمه‌ها
-    kb = InlineKeyboardMarkup()
-
-    # صفحه قبل
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
     if page > 1:
-        kb.add(InlineKeyboardButton("⬅️ صفحه قبل", callback_data=f"cn_all_{page-1}"))
-
-    # صفحه بعد
+        kb.add("⬅️ صفحه قبل")
     if offset + limit < total:
-        kb.add(InlineKeyboardButton("➡️ صفحه بعد", callback_data=f"cn_all_{page+1}"))
+        kb.add("➡️ صفحه بعد")
 
-    # مدیریت
-    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+    kb.add("🔎 مدیریت کافی‌نت")
+    kb.add("⬅️ بازگشت")
 
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await message.answer(text, reply_markup=kb)
+
+@dp.message_handler(lambda m: m.text in ["⬅️ صفحه قبل", "➡️ صفحه بعد"])
+async def paginate_cafenets(message: types.Message):
+    uid = message.from_user.id
+    page = cafenet_page_state.get(uid, 1)
+
+    if message.text == "⬅️ صفحه قبل":
+        page -= 1
+    else:
+        page += 1
+
+    cafenet_page_state[uid] = max(1, page)
+
+    await send_cafenet_list(message)
+
+
 
 @dp.message_handler(lambda m: cafenet_manage_state.get(m.from_user.id))
 async def show_cafenet_info(msg: types.Message):
@@ -1576,26 +1619,30 @@ async def show_cafenets_by_province(call: types.CallbackQuery):
 
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data == "cn_filter_city")
-async def select_cafenet_city(call: types.CallbackQuery):
+@dp.message_handler(lambda m: m.text == "🏙 فیلتر بر اساس شهر")
+async def filter_by_city(message: types.Message):
+    cafenet_filter_state[message.from_user.id] = "city"
+
     async with pool.acquire() as conn:
-        cities = await conn.fetch("""
+        rows = await conn.fetch("""
             SELECT c.id, c.name, p.name AS province
             FROM cities c
-            JOIN provinces p ON p.id = c.province_id
+            JOIN provinces p ON p.id=c.province_id
             ORDER BY p.name, c.name
         """)
 
-    kb = InlineKeyboardMarkup()
-    for ct in cities:
-        kb.add(InlineKeyboardButton(f"{ct['province']} - {ct['name']}", callback_data=f"cn_city_{ct['id']}"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    for row in rows:
+        kb.add(f"{row['id']} - {row['province']} / {row['name']}")
 
-    await call.message.edit_text("🏙 یک شهر انتخاب کنید:", reply_markup=kb)
+    kb.add("⬅️ بازگشت")
 
-@dp.callback_query_handler(lambda c: c.data.startswith("cn_city_"))
-async def show_cafenets_by_city(call: types.CallbackQuery):
-    city_id = int(call.data.split("_")[2])
+    await message.answer("🏙 شهر را انتخاب کنید:", reply_markup=kb)
+
+@dp.message_handler(lambda m: " - " in m.text and cafenet_filter_state.get(m.from_user.id) == "city")
+async def show_by_city(message: types.Message):
+    city_id = int(message.text.split(" - ")[0])
+    del cafenet_filter_state[message.from_user.id]
 
     async with pool.acquire() as conn:
         nets = await conn.fetch("""
@@ -1603,56 +1650,105 @@ async def show_cafenets_by_city(call: types.CallbackQuery):
         """, city_id)
 
     if not nets:
-        return await call.message.edit_text("❌ هیچ کافی‌نتی در این شهر ثبت نشده.")
+        return await message.answer("❌ هیچ کافی‌نتی در این شهر نیست.")
 
-    text = "🏢 کافی‌نت‌ها:\n\n"
-    for cnet in nets:
-        text += f"• {cnet['name']} (ID: <code>{cnet['id']}</code>)\n"
+    text = f"🏙 کافی‌نت‌های این شهر:\n\n"
+    for n in nets:
+        text += f"• {n['name']} (ID: {n['id']})\n"
 
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🔎 مدیریت کافی‌نت")
+    kb.add("⬅️ بازگشت")
 
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await message.answer(text, reply_markup=kb)
+
+
 
 cafenet_search_state = {}
 
-@dp.callback_query_handler(lambda c: c.data == "cn_search")
-async def ask_cafenet_name(call: types.CallbackQuery):
-    cafenet_search_state[call.from_user.id] = True
-    await call.message.edit_text("🔍 نام کافی‌نت را وارد کنید:")
+
+@dp.message_handler(lambda m: m.text == "🔍 جستجو با نام")
+async def ask_cafenet_name(message: types.Message):
+    cafenet_search_state[message.from_user.id] = True
+    await message.answer("🔍 نام کافی‌نت را وارد کنید:")
 
 @dp.message_handler(lambda m: cafenet_search_state.get(m.from_user.id))
-async def search_cafenet(msg: types.Message):
-    term = msg.text.strip()
-    cafenet_search_state.pop(msg.from_user.id, None)
+async def search_cafenet(message: types.Message):
+    term = message.text
+    del cafenet_search_state[message.from_user.id]
 
     async with pool.acquire() as conn:
-        nets = await conn.fetch("""
-            SELECT id, name, province_id, city_id
-            FROM cafenets
+        rows = await conn.fetch("""
+            SELECT id, name FROM cafenets
             WHERE name ILIKE $1
         """, f"%{term}%")
 
-    if not nets:
-        return await msg.answer("❌ کافی‌نتی پیدا نشد.")
+    if not rows:
+        return await message.answer("❌ هیچ کافی‌نتی یافت نشد.")
 
-    text = "🔍 نتایج:\n\n"
-    for n in nets:
-        text += f"• {n['name']} (ID: <code>{n['id']}</code>)\n"
+    text = "🔍 نتایج جستجو:\n\n"
+    for r in rows:
+        text += f"• {r['name']} (ID: {r['id']})\n"
 
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🔎 مدیریت کافی‌نت", callback_data="cn_manage_select"))
-    kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_cafenet"))
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🔎 مدیریت کافی‌نت")
+    kb.add("⬅️ بازگشت")
 
-    await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+    await message.answer(text, reply_markup=kb)
 
-cafenet_manage_state = {}
+@dp.message_handler(lambda m: m.text == "🔎 مدیریت کافی‌نت")
+async def ask_cafenet_id(message: types.Message):
+    cafenet_state[message.from_user.id] = True
+    await message.answer("🔎 آیدی عددی کافی‌نت را ارسال کنید:")
 
-@dp.callback_query_handler(lambda c: c.data == "cn_manage_select")
-async def ask_cafenet_id(call: types.CallbackQuery):
-    cafenet_manage_state[call.from_user.id] = True
-    await call.message.edit_text("🔎 آیدی عددی کافی‌نت را ارسال کنید:")
+
+@dp.message_handler(lambda m: cafenet_state.get(m.from_user.id))
+async def show_cafenet_info(message: types.Message):
+    del cafenet_state[message.from_user.id]
+
+    try:
+        cid = int(message.text)
+    except:
+        return await message.answer("❌ آیدی معتبر نیست.")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT c.*, p.name AS province, ci.name AS city
+            FROM cafenets c
+            JOIN provinces p ON p.id=c.province_id
+            JOIN cities ci ON ci.id=c.city_id
+            WHERE c.id=$1
+        """, cid)
+
+        if not row:
+            return await message.answer("❌ کافی‌نت یافت نشد.")
+
+        owner_id = row["owner_user_id"]
+
+        if owner_id:
+            user = await conn.fetchrow("SELECT full_name, username FROM users WHERE user_id=$1", owner_id)
+            if user:
+                owner_text = f"{user['full_name']} (@{user['username'] or '---'})"
+            else:
+                owner_text = f"{owner_id}"
+        else:
+            owner_text = "ثبت نشده"
+
+    text = (
+        f"🏢 <b>{row['name']}</b>\n"
+        f"🆔 ID: {cid}\n"
+        f"📍 استان: {row['province']}\n"
+        f"🏙 شهر: {row['city']}\n"
+        f"📞 تلفن: {row['phone']}\n"
+        f"🌐 آدرس: {row['address']}\n\n"
+        f"👤 <b>متصدی:</b> {owner_text}"
+    )
+
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("⬅️ بازگشت")
+
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
 
 
 # ========================
