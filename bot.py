@@ -26,6 +26,14 @@ class UserStates(StatesGroup):
     waiting_for_post_limit = State()
     waiting_for_tracking_code = State()
 
+
+add_tool_state = {}
+edit_tool_state = {}
+user_manage_state = {}
+cafenet_manage_state = {}
+user_search_state = {}
+broadcast_state = {}
+
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -175,11 +183,20 @@ async def init_db():
             );
             """)
 
-            
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();
-            ALTER TABLE cafenets
-            ADD COLUMN owner_user_id BIGINT;
+            await conn.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+            """)
+            await conn.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();
+            """)
+
+            await conn.execute("""
+                ALTER TABLE cafenets
+            """)
+
+            await conn.execute("""
+                ADD COLUMN owner_user_id BIGINT;
+            """)
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
