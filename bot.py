@@ -167,6 +167,14 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT now()
             );
             """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tools (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                message TEXT
+            );
+            """)
+
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
@@ -183,6 +191,7 @@ def main_menu():
     kb.add(KeyboardButton("📋 سفارش خدمات"))
     kb.add(KeyboardButton("🔍 جستجو اطلاعیه/خبر"))
     kb.add(KeyboardButton("🔔 دریافت خودکار خبر"))
+    kb.add(KeyboardButton("🛠 ابزارهای کافی نتی"))
     kb.add(KeyboardButton("🧭 مراجعه حضوری"))
     kb.add(KeyboardButton("⚙️ مدیریت خدمات"))
     kb.add(KeyboardButton("⚙️ تنظیمات"))
@@ -693,6 +702,7 @@ async def manage_services(message: types.Message):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("➕ افزودن خدمات"))
     kb.add(KeyboardButton("❌ حذف خدمات"))
+    kb.add(KeyboardButton("➕ افزودن ابزار"))
     kb.add(KeyboardButton("⬅️ بازگشت به منوی اصلی"))
 
     await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
@@ -800,12 +810,125 @@ async def get_service_docs(msg: types.Message, state: FSMContext):
 
 
 
+# ======================
+# افزودن ابزار
+# =======================
+@dp.message_handler(lambda m: m.text == "➕ افزودن ابزار")
+async def start_add_tool(msg: types.Message):
+    add_tool_state[msg.from_user.id] = {"step": 1}
+    await msg.answer("🛠 نام ابزار را ارسال کنید:", reply_markup=ReplyKeyboardRemove())
+
+
+@dp.message_handler(lambda m: m.from_user.id in add_tool_state and add_tool_state[m.from_user.id]["step"] == 1)
+async def get_tool_name(msg: types.Message):
+    add_tool_state[msg.from_user.id]["name"] = msg.text
+    add_tool_state[msg.from_user.id]["step"] = 2
+    await msg.answer("✏️ پیام مربوط به این ابزار را ارسال کنید:")
+
+
+@dp.message_handler(lambda m: m.from_user.id in add_tool_state and add_tool_state[m.from_user.id]["step"] == 2)
+async def get_tool_message(msg: types.Message):
+    add_tool_state[msg.from_user.id]["message"] = msg.text
+    add_tool_state[msg.from_user.id]["step"] = 3
+
+    name = add_tool_state[msg.from_user.id]["name"]
+    message = add_tool_state[msg.from_user.id]["message"]
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ تأیید", callback_data="confirm_add_tool"))
+    kb.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_add_tool"))
+
+    await msg.answer(
+        f"نام ابزار: {name}\n"
+        f"پیام ابزار:\n{message}\n\n"
+        "تأیید می‌کنی؟",
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(lambda c: c.data == "confirm_add_tool")
+async def confirm_tool(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    data = add_tool_state.get(user_id)
+
+    if not data:
+        return await call.answer("خطا! داده‌ای یافت نشد.", show_alert=True)
+
+    name = data["name"]
+    message = data["message"]
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO tools (name, message) VALUES ($1, $2)",
+            name, message
+        )
+
+    add_tool_state.pop(user_id, None)
+
+    await call.message.edit_text("✅ ابزار با موفقیت اضافه شد.")
+    await call.message.answer("به منو مدیریت برگشتی.", reply_markup=admin_menu())
+
+@dp.callback_query_handler(lambda c: c.data == "cancel_add_tool")
+async def cancel_tool(call: types.CallbackQuery):
+    add_tool_state.pop(call.from_user.id, None)
+    await call.message.edit_text("❌ افزودن ابزار لغو شد.")
+    await call.message.answer("به منوی مدیریت برگشتی.", reply_markup=admin_menu())
+
+# ==========================
+# 🛠 نمایش ابزارهای کافی نتی
+# ==========================
+@dp.message_handler(lambda m: m.text == "🛠 ابزارهای کافی نتی")
+async def show_tools(msg: types.Message):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, name FROM tools ORDER BY id DESC")
+
+    if not rows:
+        return await msg.answer("هیچ ابزاری ثبت نشده است.", reply_markup=main_menu())
+
+    kb = InlineKeyboardMarkup()
+    for row in rows:
+        kb.add(InlineKeyboardButton(row["name"], callback_data=f"tool_{row['id']}"))
+
+    kb.add(InlineKeyboardButton("🔙 برگشت", callback_data="back_to_main"))
+
+    await msg.answer("🛠 فهرست ابزارها:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("tool_"))
+async def show_tool_message(call: types.CallbackQuery):
+    tool_id = int(call.data.split("_")[1])
+
+    async with pool.acquire() as conn:
+        tool = await conn.fetchrow("SELECT name, message FROM tools WHERE id=$1", tool_id)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔙 برگشت", callback_data="back_to_tools"))
+
+    await call.message.edit_text(
+        f"🛠 <b>{tool['name']}</b>\n\n{tool['message']}",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == "back_to_tools")
+async def back_to_tools(call: types.CallbackQuery):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, name FROM tools ORDER BY id DESC")
+
+    kb = InlineKeyboardMarkup()
+    for row in rows:
+        kb.add(InlineKeyboardButton(row["name"], callback_data=f"tool_{row['id']}"))
+    kb.add(InlineKeyboardButton("🔙 برگشت", callback_data="back_to_main"))
+
+    await call.message.edit_text("🛠 فهرست ابزارها:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data == "back_to_main")
+async def back_to_main(call: types.CallbackQuery):
+    await call.message.edit_text("منو اصلی:")
+    await call.message.answer("👇 انتخاب کن:", reply_markup=main_menu())
 
 
 
-
-
-
+# ========================
 # هندلر برای تکمیل سفارش
 @dp.callback_query_handler(lambda c: c.data.startswith("complete_"))
 async def complete_order(callback_query: types.CallbackQuery):
