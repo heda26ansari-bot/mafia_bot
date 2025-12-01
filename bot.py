@@ -216,15 +216,6 @@ async def init_db():
         raise
 
 
-@dp.message_handler()
-async def update_last_seen(msg: types.Message):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET last_seen = NOW() WHERE user_id=$1",
-            msg.from_user.id
-        )
-
-
 # ---------------- کیبورد ----------------
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
@@ -2450,6 +2441,25 @@ async def contact_support_callback(call: types.CallbackQuery):
     lines.append("\nلطفاً روی لینک کلیک کنید یا شناسه را جهت شروع گفتگو استفاده کنید.")
 
     await call.message.answer("\n".join(lines), parse_mode="HTML")
+
+
+class LastSeenMiddleware(BaseMiddleware):
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        # اگر pool هنوز ساخته نشده، نپرس
+        if pool is None:
+            return
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET last_seen = NOW() WHERE user_id=$1",
+                    message.from_user.id
+                )
+        except Exception:
+            # خطاهای DB را لاگ کن اما پیام را متوقف نکن
+            logging.exception("error updating last_seen")
+
+# سپس در ابتدای فایل یا قبل از start polling
+dp.middleware.setup(LastSeenMiddleware())
 
 
 # ---------------- راه‌اندازی ----------------
