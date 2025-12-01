@@ -33,6 +33,7 @@ user_manage_state = {}
 cafenet_manage_state = {}
 user_search_state = {}
 broadcast_state = {}
+cafenet_location_state = {}
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -192,6 +193,11 @@ async def init_db():
 
             await conn.execute("""
                 ALTER TABLE cafenets
+            """)
+
+            await conn.execute("""
+                ALTER TABLE cafenets ADD COLUMN location_lat DOUBLE PRECISION;
+                ALTER TABLE cafenets ADD COLUMN location_lon DOUBLE PRECISION;
             """)
 
             await conn.execute("""
@@ -490,72 +496,124 @@ async def show_cafenets_in_city(call: types.CallbackQuery):
 
     await call.message.edit_text(text, parse_mode="HTML")
 
-from aiogram.dispatcher.filters.state import State, StatesGroup
+# ======================
+# ثبت کافی‌نت
+# ======================
 
 class RegisterCafeNet(StatesGroup):
     waiting_for_name = State()
     waiting_for_address = State()
     waiting_for_phone = State()
+    waiting_for_location = State()
+    finalize = State()
 
 @dp.callback_query_handler(lambda c: c.data == "register_cafenet")
 async def choose_province_for_register(call: types.CallbackQuery):
-    INSERT INTO cafenets (name, province_id, city_id, address, phone, owner_user_id)
-    VALUES ($1, $2, $3, $4, $5, $6)
-
     async with pool.acquire() as conn:
         provinces = await conn.fetch("SELECT id, name FROM provinces ORDER BY name")
+
     kb = InlineKeyboardMarkup(row_width=2)
     for p in provinces:
         kb.add(InlineKeyboardButton(p["name"], callback_data=f"reg_province_{p['id']}"))
+
     await call.message.edit_text("📍 لطفاً استان خود را انتخاب کنید:", reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("reg_province_"))
 async def choose_city_for_register(call: types.CallbackQuery):
     province_id = int(call.data.split("_")[2])
+
     async with pool.acquire() as conn:
         cities = await conn.fetch("SELECT id, name FROM cities WHERE province_id=$1 ORDER BY name", province_id)
+
     kb = InlineKeyboardMarkup(row_width=2)
     for cty in cities:
         kb.add(InlineKeyboardButton(cty["name"], callback_data=f"reg_city_{province_id}_{cty['id']}"))
+
     await call.message.edit_text("🏙 شهر خود را انتخاب کنید:", reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("reg_city_"))
 async def ask_cafenet_name(call: types.CallbackQuery, state: FSMContext):
     _, _, province_id, city_id = call.data.split("_")
-    await state.update_data(province_id=int(province_id), city_id=int(city_id))
+
+    await state.update_data(
+        province_id=int(province_id),
+        city_id=int(city_id)
+    )
+
     await RegisterCafeNet.waiting_for_name.set()
-    await call.message.answer("✍️ لطفاً نام کافی‌نت خود را وارد کنید:")
+    await call.message.answer("✍️ لطفاً نام کافی‌نت را وارد کنید:")
 
 @dp.message_handler(state=RegisterCafeNet.waiting_for_name)
 async def get_cafenet_name(msg: types.Message, state: FSMContext):
     await state.update_data(name=msg.text)
+
     await RegisterCafeNet.waiting_for_address.set()
     await msg.answer("📍 لطفاً آدرس کامل کافی‌نت را ارسال کنید:")
 
 @dp.message_handler(state=RegisterCafeNet.waiting_for_address)
 async def get_cafenet_address(msg: types.Message, state: FSMContext):
     await state.update_data(address=msg.text)
+
     await RegisterCafeNet.waiting_for_phone.set()
     await msg.answer("📞 لطفاً شماره تماس کافی‌نت را ارسال کنید:")
 
 @dp.message_handler(state=RegisterCafeNet.waiting_for_phone)
+async def ask_cafenet_location(msg: types.Message, state: FSMContext):
+    await state.update_data(phone=msg.text)
+
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(KeyboardButton("📍 ارسال موقعیت مکانی", request_location=True))
+    kb.add("⏭ بدون موقعیت")
+
+    await RegisterCafeNet.waiting_for_location.set()
+    await msg.answer(
+        "📍 لطفاً موقعیت مکانی کافی‌نت را ارسال کنید:\n"
+        "یا گزینه «⏭ بدون موقعیت» را انتخاب کنید.",
+        reply_markup=kb
+    )
+
+@dp.message_handler(content_types=types.ContentType.LOCATION, state=RegisterCafeNet.waiting_for_location)
+async def save_location(msg: types.Message, state: FSMContext):
+    await state.update_data(
+        location_lat=msg.location.latitude,
+        location_lon=msg.location.longitude
+    )
+
+    await RegisterCafeNet.finalize.set()
+
+    await msg.answer("✅ موقعیت ثبت شد.", reply_markup=ReplyKeyboardRemove())
+    await finalize_cafenet_registration(msg, state)
+
+@dp.message_handler(lambda m: m.text == "⏭ بدون موقعیت", state=RegisterCafeNet.waiting_for_location)
+async def skip_location(msg: types.Message, state: FSMContext):
+    await state.update_data(location_lat=None, location_lon=None)
+
+    await RegisterCafeNet.finalize.set()
+
+    await msg.answer("🔸 بدون موقعیت ادامه داده شد.", reply_markup=ReplyKeyboardRemove())
+    await finalize_cafenet_registration(msg, state)
+
 async def finalize_cafenet_registration(msg: types.Message, state: FSMContext):
     data = await state.get_data()
-    province_id = data["province_id"]
-    city_id = data["city_id"]
-    name = data["name"]
-    address = data["address"]
-    phone = msg.text
 
     async with pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO cafenets (province_id, city_id, name, address, phone)
-            VALUES ($1, $2, $3, $4, $5)
-        """, province_id, city_id, name, address, phone)
+            INSERT INTO cafenets
+            (name, province_id, city_id, address, phone, owner_user_id, location_lat, location_lon)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+            data["name"],
+            data["province_id"],
+            data["city_id"],
+            data["address"],
+            data["phone"],
+            msg.from_user.id,
+            data["location_lat"],
+            data["location_lon"]
+        )
 
-    await msg.answer("✅ کافی‌نت شما با موفقیت ثبت شد.", reply_markup=main_menu())
+    await msg.answer("🎉 کافی‌نت با موفقیت ثبت شد.", reply_markup=main_menu())
     await state.finish()
-
 
 
 #===============================
