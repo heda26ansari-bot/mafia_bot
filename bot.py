@@ -12,6 +12,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.dispatcher import FSMContext
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.dispatcher.middlewares import BaseMiddleware
+from aiogram.types import ReplyKeyboardRemove
 
 class OrderForm(StatesGroup):
     waiting_for_documents = State()
@@ -42,6 +43,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 logging.basicConfig(level=logging.INFO)
 ADMIN_ID = 7918162941
+ADMINS = [ADMIN_ID]
 
 # ---------------- اتصال بات ----------------
 bot = Bot(token=API_TOKEN, parse_mode="HTML")
@@ -800,6 +802,17 @@ async def manage_services(message: types.Message):
 
     await message.answer("⚙️ بخش مدیریت خدمات", reply_markup=kb)
     
+
+def admin_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ افزودن خدمات")
+    kb.add("❌ حذف خدمات")
+    kb.add("➕ افزودن ابزار")
+    kb.add("👤 مدیریت کاربران")
+    kb.add("📨 ارسال پیام انبوه")
+    kb.add("🏢 مدیریت کافی‌نت")
+    kb.add("⬅️ بازگشت به منوی اصلی")
+    return kb
 
 
 @dp.message_handler(lambda m: m.text == "❌ حذف خدمات")
