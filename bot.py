@@ -190,19 +190,25 @@ async def init_db():
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();
             """)
+            
 
+            # اضافه‌کردن ستون موقعیت مکانی (در صورت نبود)
             await conn.execute("""
-                ALTER TABLE cafenets
+                ALTER TABLE cafenets 
+                ADD COLUMN IF NOT EXISTS location_lat DOUBLE PRECISION
             """)
 
             await conn.execute("""
-                ALTER TABLE cafenets ADD COLUMN location_lat DOUBLE PRECISION;
-                ALTER TABLE cafenets ADD COLUMN location_lon DOUBLE PRECISION;
+                ALTER TABLE cafenets 
+                ADD COLUMN IF NOT EXISTS location_lon DOUBLE PRECISION
+                """)
+
+            # اضافه‌کردن ستون متصدی
+            await conn.execute("""
+                ALTER TABLE cafenets 
+                ADD COLUMN IF NOT EXISTS owner_user_id BIGINT
             """)
 
-            await conn.execute("""
-                ADD COLUMN owner_user_id BIGINT;
-            """)
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
