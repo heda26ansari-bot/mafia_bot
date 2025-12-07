@@ -36,6 +36,7 @@ cafenet_manage_state = {}
 user_search_state = {}
 broadcast_state = {}
 cafenet_location_state = {}
+cafenet_state = {}
 
 # ---------------- تنظیمات ----------------
 API_TOKEN = os.getenv("BOT_TOKEN")
