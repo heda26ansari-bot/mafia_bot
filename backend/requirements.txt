@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+databases==0.6.1
+asyncpg
+python-jose[cryptography]
+passlib[bcrypt]
+httpx
+python-dotenv
+python-multipart
+pydantic
