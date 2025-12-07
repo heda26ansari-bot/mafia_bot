@@ -1,14 +1,10 @@
-import os
-from pydantic import BaseSettings
+from databases import Database
+from .config import settings
 
-class Settings(BaseSettings):
-    DATABASE_URL: str
-    JWT_SECRET: str
-    JWT_EXPIRES_MINUTES: int = 1440
-    BOT_TOKEN: str
-    ADMIN_INITIAL_PASSWORD: str = "change_me"
+database = Database(settings.DATABASE_URL)
 
-    class Config:
-        env_file = ".env"
+async def connect_db():
+    await database.connect()
 
-settings = Settings()
+async def disconnect_db():
+    await database.disconnect()
