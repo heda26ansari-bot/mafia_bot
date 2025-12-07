@@ -819,6 +819,20 @@ def admin_menu():
     return kb
 
 
+def admin_services_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ افزودن خدمات", "❌ حذف خدمات")
+    kb.add("➕ افزودن ابزار", "👤 مدیریت کاربران")
+    kb.add("🏢 مدیریت کافی‌نت", "📨 ارسال پیام انبوه")
+    kb.add("⬅️ بازگشت به منوی اصلی")
+    return kb
+
+@dp.message_handler(lambda m: m.text == "⬅️ بازگشت به مدیریت خدمات")
+async def back_to_admin_services(message: types.Message):
+    await message.answer("به بخش مدیریت خدمات برگشتی.", reply_markup=admin_services_menu())
+
+
+
 @dp.message_handler(lambda m: m.text == "❌ حذف خدمات")
 async def delete_service_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -1162,6 +1176,20 @@ async def manage_users(message: types.Message):
 
     await message.answer("👤 مدیریت کاربران:", reply_markup=kb)
 
+def admin_users_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📅 کاربران امروز", "📆 کاربران هفته")
+    kb.add("🗓 کاربران ماه", "⏱ آخرین فعالیت کاربران")
+    kb.add("📊 تعداد کل کاربران")
+    kb.add("⬅️ بازگشت به مدیریت خدمات")
+    return kb
+
+def admin_cafenet_menu():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("➕ افزودن کافی‌نت")
+    kb.add("📋 لیست کافی‌نت‌ها")
+    kb.add("⬅️ بازگشت به مدیریت خدمات")
+    return kb
 
 
 async def fetch_users(filter_type):
@@ -2462,22 +2490,31 @@ async def contact_support_callback(call: types.CallbackQuery):
 
 
 class LastSeenMiddleware(BaseMiddleware):
-    async def on_pre_process_message(self, message: types.Message, data: dict):
-        # اگر pool هنوز ساخته نشده، نپرس
-        if pool is None:
+    async def _update_last_seen(self, uid: int):
+        if pool is None or uid is None:
             return
         try:
             async with pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE users SET last_seen = NOW() WHERE user_id=$1",
-                    message.from_user.id
+                    uid
                 )
         except Exception:
-            # خطاهای DB را لاگ کن اما پیام را متوقف نکن
             logging.exception("error updating last_seen")
 
-# سپس در ابتدای فایل یا قبل از start polling
-dp.middleware.setup(LastSeenMiddleware())
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        await self._update_last_seen(message.from_user.id)
+
+    async def on_pre_process_update(self, update: types.Update, data: dict):
+        # این متد هم callback_query و message و ... را پوشش می‌دهد
+        try:
+            if update.message:
+                await self._update_last_seen(update.message.from_user.id)
+            elif update.callback_query:
+                await self._update_last_seen(update.callback_query.from_user.id)
+        except Exception:
+            # لاگ کن و ادامه بده
+            logging.exception("LastSeenMiddleware.on_pre_process_update error")
 
 
 # ---------------- راه‌اندازی ----------------
