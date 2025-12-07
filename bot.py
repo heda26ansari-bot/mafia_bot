@@ -190,6 +190,46 @@ async def init_db():
                 message TEXT
             );
             """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                created_at TIMESTAMP DEFAULT now()
+            );
+
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+               id SERIAL PRIMARY KEY,
+               user_id BIGINT NOT NULL,
+               subject TEXT,
+               message TEXT,
+               status TEXT DEFAULT 'open', -- open | answered | closed
+               admin_reply TEXT,
+               created_at TIMESTAMP DEFAULT now(),
+               updated_at TIMESTAMP
+            );
+
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS auto_replies (
+                id SERIAL PRIMARY KEY,
+                trigger TEXT NOT NULL,
+                reply TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT now()
+            );
+
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tools (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                message TEXT
+            );
+
+            await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
+            CREATE INDEX IF NOT EXISTS idx_auto_triggers ON auto_replies(trigger);
 
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
