@@ -1447,6 +1447,104 @@ async def user_mgmt_back(call: types.CallbackQuery):
 
 broadcast_state = {}
 
+
+# ==============================
+#  مدیریت کاربران - آمار
+# ==============================
+
+@dp.message_handler(lambda m: m.text == "📅 کاربران امروز")
+async def users_today(message: types.Message):
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) FROM users 
+            WHERE created_at::date = CURRENT_DATE
+        """)
+    await message.answer(f"📅 تعداد کاربران امروز: {count}")
+
+
+@dp.message_handler(lambda m: m.text == "📆 کاربران هفته")
+async def users_week(message: types.Message):
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) FROM users 
+            WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
+        """)
+    await message.answer(f"📆 تعداد کاربران هفته: {count}")
+
+
+@dp.message_handler(lambda m: m.text == "🗓 کاربران ماه")
+async def users_month(message: types.Message):
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) FROM users 
+            WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+        """)
+    await message.answer(f"🗓 تعداد کاربران ماه: {count}")
+
+
+@dp.message_handler(lambda m: m.text == "⏱ آخرین فعالیت کاربران")
+async def last_seen_users(message: types.Message):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT user_id, last_seen FROM users 
+            ORDER BY last_seen DESC 
+            LIMIT 20
+        """)
+    txt = "⏱ آخرین فعالیت 20 کاربر اخیر:\n\n"
+    for r in rows:
+        txt += f"👤 {r['user_id']} — {r['last_seen']}\n"
+    await message.answer(txt)
+
+
+@dp.message_handler(lambda m: m.text == "📊 تعداد کل کاربران")
+async def total_users(message: types.Message):
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM users")
+    await message.answer(f"📊 تعداد کل کاربران: {count}")
+
+
+@dp.message_handler(lambda m: m.text == "🔍 جستجوی کاربر")
+async def search_user_start(message: types.Message):
+    await message.answer("🔍 لطفاً آیدی عددی کاربر را وارد کنید:")
+    user_states[message.from_user.id] = "search_user"
+
+
+@dp.message_handler(lambda m: user_states.get(m.from_user.id) == "search_user")
+async def search_user_process(message: types.Message):
+    uid = message.text.strip()
+
+    if not uid.isdigit():
+        return await message.answer("❌ آیدی باید فقط عدد باشد.")
+
+    uid = int(uid)
+
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("""
+            SELECT * FROM users WHERE user_id=$1
+        """, uid)
+
+    if not user:
+        await message.answer("❌ کاربری با این مشخصات پیدا نشد.")
+    else:
+        await message.answer(f"👤 کاربر پیدا شد:\n\n"
+                             f"ID: {user['user_id']}\n"
+                             f"نام: {user['first_name']}\n"
+                             f"نام‌کاربری: @{user['username']}\n"
+                             f"آخرین فعالیت: {user['last_seen']}")
+
+    user_states.pop(message.from_user.id, None)
+
+
+# ===================================
+@dp.message_handler(lambda m: m.text == "⬅️ بازگشت به مدیریت کافی‌نت")
+async def back_to_cafenet_menu(message: types.Message):
+    await message.answer("🏢 مدیریت کافی‌نت", reply_markup=admin_cafenet_menu())
+
+@dp.message_handler(lambda m: m.text == "⬅️ بازگشت به مدیریت خدمات")
+async def back_to_services(message: types.Message):
+    await message.answer("⚙️ مدیریت خدمات", reply_markup=admin_services_menu())
+
+
 @dp.message_handler(lambda m: m.text == "📨 ارسال پیام انبوه")
 async def broadcast_start(message: types.Message):
     if message.from_user.id not in ADMINS:
