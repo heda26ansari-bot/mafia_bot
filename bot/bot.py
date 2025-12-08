@@ -118,7 +118,7 @@ async def init_db():
                 user_id BIGINT PRIMARY KEY,
                 post_limit INTEGER DEFAULT 5,
                 notifications_enabled BOOLEAN DEFAULT TRUE
-            );
+                );
             """)
 
             # جدول های مربوط به پست/هشتگ — ابتدا هشتگ‌ها و پست‌ها
@@ -183,7 +183,7 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT now()
             );
             """)
-            
+
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS tools (
                 id SERIAL PRIMARY KEY,
@@ -191,7 +191,7 @@ async def init_db():
                 message TEXT
             );
             """)
-            
+
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 id SERIAL PRIMARY KEY,
@@ -201,7 +201,7 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT now()
             );
             """)
-            
+
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
                id SERIAL PRIMARY KEY,
@@ -214,7 +214,7 @@ async def init_db():
                updated_at TIMESTAMP
             );
             """)
-            
+
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS auto_replies (
                 id SERIAL PRIMARY KEY,
@@ -224,40 +224,34 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT now()
             );
             """)
-            
-            await conn.execute("""
-            CREATE TABLE IF NOT EXISTS tools (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                message TEXT
-            );
 
+            # *** خطای اصلی در این ناحیه بود ***
+            # شما تعریف تکراری جدول tools را داشتید اما گیومه بسته را فراموش کرده بودید.
+            # من آن را حذف کردم و خطای سینتکسی برطرف شد.
 
+            # به‌روزرسانی جدول users
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
             """)
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();
             """)
-            
 
-            # اضافه‌کردن ستون موقعیت مکانی (در صورت نبود)
+            # به‌روزرسانی جدول cafenets (ستون‌های موقعیت مکانی و متصدی)
             await conn.execute("""
-                ALTER TABLE cafenets 
+                ALTER TABLE cafenets
                 ADD COLUMN IF NOT EXISTS location_lat DOUBLE PRECISION
             """)
 
             await conn.execute("""
-                ALTER TABLE cafenets 
+                ALTER TABLE cafenets
                 ADD COLUMN IF NOT EXISTS location_lon DOUBLE PRECISION
-                """)
-
-            # اضافه‌کردن ستون متصدی
-            await conn.execute("""
-                ALTER TABLE cafenets 
-                ADD COLUMN IF NOT EXISTS owner_user_id BIGINT
             """)
 
+            await conn.execute("""
+                ALTER TABLE cafenets
+                ADD COLUMN IF NOT EXISTS owner_user_id BIGINT
+            """)
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
