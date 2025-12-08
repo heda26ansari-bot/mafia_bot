@@ -2522,28 +2522,32 @@ async def show_order_status(message: types.Message, state: FSMContext):
 
     async with pool.acquire() as conn:
         order = await conn.fetchrow("""
-            SELECT o.order_code, o.status, o.docs, o.created_at, s.title
+            SELECT 
+                o.order_code, 
+                o.status, 
+                o.docs, 
+                o.created_at, 
+                s.title
             FROM orders o
             JOIN services s ON o.service_id = s.id
-            WHERE o.order_code=$1 AND o.user_id=$2
+            WHERE o.order_code = $1 AND o.user_id = $2
         """, code, message.from_user.id)
 
     if not order:
-        await message.reply("❌ سفارشی با این کد پیدا نشد.", reply_markup=main_menu())
-    else:
-        docs = order["docs"] or "—"
-        created = order["created_at"].strftime("%Y/%m/%d %H:%M")
-        text = (
-            f"📦 <b>وضعیت سفارش</b>\n\n"
-            f"🔖 کد: <code>{order['order_code']}</code>\n"
-            f"🧩 خدمت: {order['title']}\n"
-            f"📅 تاریخ ثبت: {created}\n"
-            f"📊 وضعیت: <b>{order['status']}</b>\n"
-            f"📝 مدارک:\n{docs}"
-        )
-        await message.reply(text, parse_mode="HTML", reply_markup=main_menu())
+        await message.answer("❌ سفارشی با این کد پیگیری پیدا نشد.")
+        return
 
+    text = (
+        f"📄 <b>وضعیت سفارش</b>\n\n"
+        f"🔖 کد سفارش: <code>{order['order_code']}</code>\n"
+        f"📌 خدمت: {order['title']}\n"
+        f"🕒 زمان ثبت: {order['created_at']:%Y/%m/%d - %H:%M}\n"
+        f"📊 وضعیت: <b>{order['status']}</b>"
+    )
+
+    await message.answer(text, parse_mode="HTML")
     await state.finish()
+
 
 
 # ===============================
