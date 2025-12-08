@@ -252,6 +252,7 @@ async def init_db():
                 ALTER TABLE cafenets
                 ADD COLUMN IF NOT EXISTS owner_user_id BIGINT
             """)
+            
 
         print("✅ دیتابیس آماده شد.")
     except Exception as e:
