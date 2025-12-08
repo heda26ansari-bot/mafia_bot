@@ -183,6 +183,7 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT now()
             );
             """)
+            
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS tools (
                 id SERIAL PRIMARY KEY,
@@ -190,6 +191,7 @@ async def init_db():
                 message TEXT
             );
             """)
+            
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 id SERIAL PRIMARY KEY,
@@ -198,7 +200,8 @@ async def init_db():
                 full_name TEXT,
                 created_at TIMESTAMP DEFAULT now()
             );
-
+            """)
+            
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
                id SERIAL PRIMARY KEY,
@@ -210,7 +213,8 @@ async def init_db():
                created_at TIMESTAMP DEFAULT now(),
                updated_at TIMESTAMP
             );
-
+            """)
+            
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS auto_replies (
                 id SERIAL PRIMARY KEY,
@@ -219,7 +223,8 @@ async def init_db():
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT now()
             );
-
+            """)
+            
             await conn.execute("""
             CREATE TABLE IF NOT EXISTS tools (
                 id SERIAL PRIMARY KEY,
