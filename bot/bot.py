@@ -227,9 +227,6 @@ async def init_db():
                 message TEXT
             );
 
-            await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
-            CREATE INDEX IF NOT EXISTS idx_auto_triggers ON auto_replies(trigger);
 
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
