@@ -2327,9 +2327,7 @@ async def cmd_add_service_menu(msg: types.Message):
 # ======================
 @dp.channel_post_handler(content_types=types.ContentTypes.ANY)
 async def process_channel_post(message: types.Message):
-    """
-    هندلر واحد برای ذخیره پست‌های کانال و ارسال خودکار به کاربران سابسکرایب‌شده.
-    """
+
     try:
         if pool is None:
             print("⚠️ pool دیتابیس آماده نشده — نمی‌توان پست را ذخیره کرد.")
